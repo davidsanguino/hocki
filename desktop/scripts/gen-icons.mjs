@@ -13,96 +13,84 @@ const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "src-tauri", "ic
 
 // ── Hocki ─────────────────────────────────────────────────────────────────────
 
-const BASE_TOP = [255, 250, 245]; // #FFFAF5
-const BASE_BOTTOM = [221, 204, 191]; // #DDCCBF
-const INK = [26, 20, 18]; // #1A1412
-const RIM = [0, 0, 0];
+const BODY = [249, 192, 205]; // #F9C0CD
+const BODY_DARK = [241, 160, 180]; // #F1A0B4
+const EAR = [240, 150, 172];
+const SNOUT = [245, 160, 181]; // #F5A0B5
+const NOSTRIL = [150, 50, 80];
+const INK = [42, 26, 30]; // #2A1A1E
+const RIM = [110, 40, 62];
 
 const SS = 4; // supersampling factor
 
-/** Superellipse (exponent 2.7) test in body-local coordinates. */
-function insideBody(x, y, rx, ry) {
-  const n = 2.7;
-  return Math.pow(Math.abs(x / rx), n) + Math.pow(Math.abs(y / ry), n) <= 1;
-}
+const inEllipse = (x, y, cx, cy, rx, ry, rot = 0) => {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  const dx = x - cx, dy = y - cy;
+  const u = dx * c + dy * s, v = -dx * s + dy * c;
+  return (u / rx) ** 2 + (v / ry) ** 2 <= 1;
+};
 
-function insidePill(x, y, w, h) {
-  const hw = w / 2;
-  const hh = h / 2;
-  const r = Math.min(hw, hh);
-  const cx = Math.max(-hw + r, Math.min(hw - r, x));
-  const cy = Math.max(-hh + r, Math.min(hh - r, y));
-  return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
+/** Hocki: cabeza redonda rosada, orejas caídas, hocico con fosas y ojos. */
+function shapes(size) {
+  const R = size * 0.34;
+  const cx = size / 2;
+  const cy = size / 2 + R * 0.12;
+  const rim = R * 0.06;
+  const list = [];
+  // [test, color-fn, rimmed]
+  const ear = (sd) => (x, y) => inEllipse(x, y, cx + sd * R * 0.98, cy - R * 0.46, R * 0.42, R * 0.3, sd * 0.6);
+  list.push({ t: ear(-1), c: () => EAR, r: true });
+  list.push({ t: ear(1), c: () => EAR, r: true });
+  list.push({
+    t: (x, y) => inEllipse(x, y, cx, cy, R * 1.05, R * 0.98),
+    c: (x, y) => {
+      const t = Math.min(1, Math.max(0, ((x - cx) * -0.6 + (y - cy) * 0.8) / (2 * R) + 0.5));
+      return [0, 1, 2].map((i) => BODY[i] + (BODY_DARK[i] - BODY[i]) * t);
+    },
+    r: true,
+  });
+  list.push({ t: (x, y) => inEllipse(x, y, cx, cy + R * 0.3, R * 0.34, R * 0.24), c: () => SNOUT, r: false });
+  for (const sd of [-1, 1]) {
+    list.push({ t: (x, y) => inEllipse(x, y, cx + sd * R * 0.11, cy + R * 0.3, R * 0.06, R * 0.09), c: () => NOSTRIL, r: false });
+    list.push({ t: (x, y) => inEllipse(x, y, cx + sd * R * 0.4, cy - R * 0.1, R * 0.12, R * 0.19), c: () => INK, r: false });
+  }
+  return { list, rim };
 }
 
 function renderHocki(size) {
   const px = new Uint8Array(size * size * 4);
-  const R = size * 0.34;
-  const rx = R * 1.14;
-  const ry = R * 0.88;
-  const cx = size / 2;
-  const cy = size / 2 + R * 0.06;
-  const rim = R * 0.055; // dark outline so the tray icon reads on light themes
-
-  // Eyes — same geometry as BotEngine (yaw ±0.37, pitch −0.12)
-  const eyeYaw = 0.37;
-  const eyePitch = -0.12;
-  const cp = Math.cos(eyePitch);
-  const ex = Math.sin(eyeYaw) * cp * rx;
-  const ey = -Math.sin(eyePitch) * ry;
-  const fx = Math.max(0.18, Math.cos(eyeYaw));
-  const fy = Math.max(0.18, cp);
-  const ew = R * 0.25 * fx;
-  const eh = R * 0.27 * fy;
-
+  const { list, rim } = shapes(size);
+  const total = SS * SS;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      let bodyHits = 0;
-      let rimHits = 0;
-      let eyeHits = 0;
+      let r = 0, g = 0, b = 0, a = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
-          const px0 = x + (sx + 0.5) / SS - cx;
-          const py0 = y + (sy + 0.5) / SS - cy;
-          if (!insideBody(px0, py0, rx + rim, ry + rim)) continue;
-          rimHits++;
-          if (!insideBody(px0, py0, rx, ry)) continue;
-          bodyHits++;
-          if (
-            insidePill(px0 + ex, py0 - ey, ew, eh) ||
-            insidePill(px0 - ex, py0 - ey, ew, eh)
-          ) {
-            eyeHits++;
+          const X = x + (sx + 0.5) / SS;
+          const Y = y + (sy + 0.5) / SS;
+          let col = null;
+          // contorno oscuro: cualquier forma con borde, ampliada
+          for (const sh of list) {
+            if (!sh.r) continue;
+            // aproximación del contorno: se prueba la forma desplazada en 8 direcciones
+            for (let k = 0; k < 8 && !col; k++) {
+              const ang = (k / 8) * Math.PI * 2;
+              if (sh.t(X + Math.cos(ang) * rim, Y + Math.sin(ang) * rim)) col = RIM;
+            }
+            if (col) break;
           }
+          for (const sh of list) {
+            if (sh.t(X, Y)) col = sh.c(X, Y);
+          }
+          if (col) { r += col[0]; g += col[1]; b += col[2]; a += 1; }
         }
       }
-      if (rimHits === 0) continue;
-
-      const total = SS * SS;
-      const rimA = rimHits / total;
-      const bodyA = bodyHits / total;
-      const eyeA = eyeHits / total;
-
-      // Body gradient: top-right → bottom-left, like the Canvas gradient.
-      const t = Math.min(1, Math.max(0, ((x - cx) * -0.6 + (y - cy) * 0.8) / (2 * ry) + 0.5));
-      const body = [0, 1, 2].map((i) => BASE_TOP[i] + (BASE_BOTTOM[i] - BASE_TOP[i]) * t);
-
-      // rim under body, body over rim, eyes over body
-      let col = RIM.slice();
-      let alpha = rimA;
-      if (bodyA > 0) {
-        col = col.map((c, i) => c * (1 - bodyA / rimA) + body[i] * (bodyA / rimA));
-        alpha = rimA;
-      }
-      if (eyeA > 0) {
-        col = col.map((c, i) => c * (1 - eyeA) + INK[i] * eyeA);
-      }
-
+      if (a === 0) continue;
       const o = (y * size + x) * 4;
-      px[o] = Math.round(col[0]);
-      px[o + 1] = Math.round(col[1]);
-      px[o + 2] = Math.round(col[2]);
-      px[o + 3] = Math.round(Math.min(1, alpha) * 255);
+      px[o] = Math.round(r / a);
+      px[o + 1] = Math.round(g / a);
+      px[o + 2] = Math.round(b / a);
+      px[o + 3] = Math.round((a / total) * 255);
     }
   }
   return px;

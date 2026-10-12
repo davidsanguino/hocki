@@ -107,10 +107,10 @@ test("System follows the system's language when Hocki has it, else English", () 
   assert.equal(resolveLanguage("", ["pt-PT"]), "pt-BR");
   assert.equal(resolveLanguage("", ["pt"]), "pt-BR");
   assert.equal(resolveLanguage("", ["zh-CN"]), "zh-Hans");
-  assert.equal(resolveLanguage("", ["zh-TW"]), "en"); // Traditional is not one of ours
+  assert.equal(resolveLanguage("", ["zh-TW"]), "es"); // Traditional is not one of ours
   assert.equal(resolveLanguage("", ["ar-EG"]), "ar");
-  assert.equal(resolveLanguage("", ["de-DE"]), "en");
-  assert.equal(resolveLanguage("", []), "en");
+  assert.equal(resolveLanguage("", ["de-DE"]), "es");
+  assert.equal(resolveLanguage("", []), "es");
   // A picked language wins; one this build doesn't know means System.
   assert.equal(resolveLanguage("ru", ["fr-FR"]), "ru");
   assert.equal(resolveLanguage("xx", ["bn-IN"]), "bn");

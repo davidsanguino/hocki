@@ -1,0 +1,65 @@
+name: Windows
+
+# Compila el instalador de Hocki para Windows en un servidor de GitHub.
+# Se ejecuta a mano (Actions > Windows > Run workflow) o al subir una etiqueta v*.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: windows-cargo-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check and test
+        run: |
+          npx tsc --noEmit
+          npm test
+
+      - name: Build and pack the installer
+        run: npm run pack
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hocki-Windows
+          path: desktop/release/*
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*

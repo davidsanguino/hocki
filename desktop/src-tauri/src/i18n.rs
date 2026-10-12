@@ -96,7 +96,7 @@ pub fn resolve(picked: &str, system: &[String]) -> &'static str {
             return code;
         }
     }
-    "en"
+    "es" // Hocki: español por defecto
 }
 
 /// Records Settings.language. Returns true when the shown language changed.
@@ -244,8 +244,8 @@ mod tests {
         assert_eq!(resolve("", &sys(&["pt-PT"])), "pt-BR");
         assert_eq!(resolve("", &sys(&["zh-CN"])), "zh-Hans");
         assert_eq!(resolve("", &sys(&["zh-TW", "de", "es-MX"])), "es");
-        assert_eq!(resolve("", &sys(&["de-DE"])), "en");
-        assert_eq!(resolve("xx", &[]), "en");
+        assert_eq!(resolve("", &sys(&["de-DE"])), "es");
+        assert_eq!(resolve("xx", &[]), "es");
     }
 
     #[test]

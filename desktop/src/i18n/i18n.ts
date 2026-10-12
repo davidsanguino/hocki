@@ -74,7 +74,7 @@ export function resolveLanguage(picked: string | undefined | null, system: reado
     const exact = LANGUAGE_CODES.find((c) => c.toLowerCase() === base);
     if (exact) return exact;
   }
-  return "en";
+  return "es"; // Hocki: español por defecto
 }
 
 /** The system's languages, as the webview knows them. */
