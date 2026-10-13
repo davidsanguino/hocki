@@ -808,7 +808,7 @@ export class BotEngine {
     if (head) drawOutfitBehind(x, this.outfit, head, outfitState);
 
     const body = this.bodyPath(rx, ry, R);
-    if (!this.isMini) this.drawEarsAndTail(x, R, rx, ry);
+    this.drawEarsAndTail(x, R, rx, ry);
     this.drawBody(x, body, R, rx, ry);
 
     const blushVal = Math.max(this.blush, this.tint * 0.5, this.isMini ? 0 : 0.45) * (1 - this.morph);
@@ -873,8 +873,10 @@ export class BotEngine {
     if (away < 0.05) return;
     x.save();
     x.globalAlpha = away;
-    const inner = rgba(mix3(BASE_BOTTOM, [0.9, 0.45, 0.55], 0.25));
-    const outer = rgba(mix3(BASE_BOTTOM, [0.94, 0.55, 0.65], 0.35));
+    // Los cerditos pequeños (integraciones) llevan orejas del tono de su color.
+    const tone: RGB = this.bodyColor ?? BASE_BOTTOM;
+    const inner = rgba(mix3(tone, [0, 0, 0], this.bodyColor ? 0.3 : 0.0) as RGB);
+    const outer = this.bodyColor ? rgba(mix3(tone, [0, 0, 0], 0.18) as RGB) : rgba(mix3(BASE_BOTTOM, [0.94, 0.55, 0.65], 0.35));
     // cola rizada
     x.save();
     x.translate(rx * 0.92, ry * 0.3);

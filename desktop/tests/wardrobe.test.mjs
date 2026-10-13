@@ -96,21 +96,21 @@ test("a stored preference is read back as it was saved", () => {
   for (const sel of OUTFIT_SELECTIONS) assert.equal(parseOutfit(sel), sel);
 });
 
-test("removed, unknown or missing preferences mean auto", () => {
+test("removed, unknown or missing preferences mean the default (none)", () => {
   for (const raw of ["topHat", "cap", "heartsHeadband", "strawHat", "totallyUnknown", "", "Beanie"]) {
-    assert.equal(parseOutfit(raw), "auto", JSON.stringify(raw));
+    assert.equal(parseOutfit(raw), "none", JSON.stringify(raw));
   }
   for (const raw of [undefined, null, 42, true, {}, ["beanie"]]) {
-    assert.equal(parseOutfit(raw), "auto", String(raw));
+    assert.equal(parseOutfit(raw), "none", String(raw));
   }
 });
 
-test("preferences from before the wardrobe start on auto", () => {
-  assert.equal(DEFAULT_SETTINGS.hockiOutfit, "auto");
+test("preferences from before the wardrobe start on none", () => {
+  assert.equal(DEFAULT_SETTINGS.hockiOutfit, "none");
   // What main.ts does with a settings.json that has no hockiOutfit key.
   const old = { soundEnabled: false, model: "x" };
   const merged = { ...DEFAULT_SETTINGS, ...old };
-  assert.equal(parseOutfit(merged.hockiOutfit), "auto");
+  assert.equal(parseOutfit(merged.hockiOutfit), "none");
 });
 
 test("the wardrobe header names the hovered outfit, else the current choice", () => {

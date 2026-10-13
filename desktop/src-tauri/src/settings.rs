@@ -148,7 +148,7 @@ impl Default for Settings {
             lmstudio_url: String::new(),
             custom_url: String::new(),
             shortcuts: Default::default(),
-            hocki_outfit: "auto".into(),
+            hocki_outfit: "none".into(),
             pill_colors: BTreeMap::new(),
             language: String::new(),
             desktop_hocki: DesktopHockiPref::default(),
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn a_file_from_before_the_wardrobe_dresses_hocki_for_the_seasons() {
         let loaded = parse(&custom_with("hockiOutfit", None)).unwrap();
-        assert_eq!(loaded.hocki_outfit, "auto");
+        assert_eq!(loaded.hocki_outfit, "none");
         assert_eq!(loaded.model, "some-model");
         assert!(!loaded.sound_enabled);
     }

@@ -17,7 +17,7 @@ export type OutfitSelection = (typeof OUTFIT_SELECTIONS)[number];
 /** What Hocki actually wears: a selection with "auto" resolved. */
 export type Outfit = Exclude<OutfitSelection, "auto">;
 
-export const DEFAULT_OUTFIT: OutfitSelection = "auto";
+export const DEFAULT_OUTFIT: OutfitSelection = "none"; // Hocki: sin adorno por defecto, para que se vean las orejas
 
 // ── User-visible strings ──────────────────────────────────────────────────────
 
