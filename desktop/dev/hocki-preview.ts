@@ -9,7 +9,7 @@ const items = states.map((s) => {
   c.width = 220 * dpr; c.height = 180 * dpr;
   const l = document.createElement("div"); l.textContent = s;
   d.append(c, l); g.append(d);
-  const e = new BotEngine(); if (location.search.includes("mini")) { e.isMini = true; e.bodyColor = [[0.13,0.77,0.37],[0.97,0.62,0.2],[0.45,0.4,1],[0.95,0.3,0.4]][states.indexOf(s)%4] as any; } e.setState(s, true); if (location.search.includes("witch")) e.setOutfit("witchHat", false);
+  const e = new BotEngine(); if (location.search.includes("mini")) { e.isMini = true; const g = [[34,197,94],[247,158,51],[115,102,255],[242,77,102]][states.indexOf(s)%4]; c.style.filter = `drop-shadow(0 0 2px rgba(${g[0]}, ${g[1]}, ${g[2]}, 0.85))`; } e.setState(s, true); if (location.search.includes("witch")) e.setOutfit("witchHat", false);
   return { c, e, dpr };
 });
 let last = performance.now();

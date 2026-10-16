@@ -41,7 +41,9 @@ export function createMiniBot(task: AgentTask, bodySize: number, dancing?: () =>
 
   const engine = new BotEngine();
   engine.isMini = true;
-  engine.bodyColor = hexToRGB(task.color);
+  // El cerdito conserva su color rosado; el color de la integración es solo un
+  // resplandor pequeño y casi sin desenfoque detrás de él.
+  setGlow(slot, task.color);
   engine.setState(task.state, true);
   if (task.emote) engine.setPermanentEmote(task.emote);
   if (task.miniEye) {
@@ -52,6 +54,13 @@ export function createMiniBot(task: AgentTask, bodySize: number, dancing?: () =>
 
   live.set(canvas, { canvas, engine, cssSize: engineSize, taskId: task.id, dancing });
   return slot;
+}
+
+/** Resplandor de la integración: pequeño, con desenfoque mínimo, pegado a la silueta. */
+export function setGlow(slot: HTMLElement, hex: string) {
+  const [r, g, b] = hexToRGB(hex).map((v) => Math.round(v * 255));
+  const value = `drop-shadow(0 0 2px rgba(${r}, ${g}, ${b}, 0.85))`;
+  if (slot.style.filter !== value) slot.style.filter = value;
 }
 
 export function releaseMiniBot(canvas: HTMLCanvasElement) {
@@ -70,7 +79,8 @@ export function syncMiniBotStates(tasks: AgentTask[]) {
     const task = tasks.find((t) => t.id === mb.taskId);
     if (!task) continue;
     mb.engine.setState(task.state);
-    mb.engine.bodyColor = hexToRGB(task.color);
+    const slot = mb.canvas.parentElement;
+    if (slot) setGlow(slot, task.color);
   }
 }
 
