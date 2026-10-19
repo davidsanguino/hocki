@@ -7,7 +7,7 @@ import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
 import { State, type AgentTask } from "../core/state";
 import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
-import { createMiniBot, pruneMiniBots } from "../hocki/minibots";
+import { createMiniBot, pruneMiniBots, tintMiniBot } from "../hocki/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
@@ -45,6 +45,8 @@ export interface ViewActions {
   /** Hands the pending request back to the terminal. */
   answerInTerminal(): void;
   toggleSound(): void;
+  /** Activa o apaga la escucha por voz ("¿Dónde estás, Hocki?", "Hocki fuera"…). */
+  toggleVoice(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
   openSettingsWindow(): void;
@@ -113,6 +115,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
   const gearBtn = h("button", { title: tl("Settings"), onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const soundBtn = h("button", { title: tl("Mute"), onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
+  const micBtn = h("button", { title: "Escucha por voz: \"¿Dónde estás, Hocki?\"", onclick: () => actions.toggleVoice() }, svg(ICONS.mic, 14));
   // Plan usage pills (off by default): before the gear, Claude first, as on the Mac.
   const claudePill = buildPlanPill(false);
   const codexPill = buildPlanPill(true);
@@ -128,7 +131,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, planPills, gearBtn, soundBtn),
+    h("div", { class: "header-actions" }, planPills, gearBtn, micBtn, soundBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
 
@@ -142,6 +145,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
       gearBtn.classList.toggle("on", v === "settings");
       clear(gearBtn);
       gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
+      micBtn.classList.toggle("on", State.voiceOn);
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
       syncPlanPills();
@@ -435,12 +439,14 @@ function buildPill(task: AgentTask, actions: ViewActions): HTMLElement {
   );
   pill.style.borderColor = `${task.color}24`;
   pill.addEventListener("mouseenter", () => {
+    tintMiniBot(canvas, true);
     pill.style.background = `${task.color}2e`;
     pill.style.borderColor = `${task.color}8c`;
     pill.style.boxShadow = `0 2px 10px ${task.color}59`;
     (pill.querySelector(".lbl") as HTMLElement).style.color = lighten(task.color, 0.3);
   });
   pill.addEventListener("mouseleave", () => {
+    tintMiniBot(canvas, false);
     pill.style.background = "";
     pill.style.borderColor = `${task.color}24`;
     pill.style.boxShadow = "";

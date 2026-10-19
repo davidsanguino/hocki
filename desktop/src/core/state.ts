@@ -205,6 +205,8 @@ class AppState {
 
   tasks: AgentTask[] = [];
   focusId: string | null = null;
+  /** La escucha por voz está activa (opcional, apagada por defecto). */
+  voiceOn = false;
 
   stateOverride: BotStateName | null = null;
 

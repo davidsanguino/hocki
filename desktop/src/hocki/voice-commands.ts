@@ -9,6 +9,7 @@ export type VoiceIntent =
   | "summary"    // "Hocki, resumen del día"
   | "hide"       // "Hocki escóndete": se aparta sin detener nada
   | "show"       // "Hocki ven"
+  | "where"      // "¿Dónde estás, Hocki?" → aparece la isla y responde "Acá estoy, jefe"
   | "unknown";
 
 export interface VoiceResult {
@@ -70,6 +71,7 @@ export function parseVoice(raw: string): VoiceResult {
   }
   if (!addressed) return { intent: "unknown", addressed: false };
 
+  if (has(s, "donde estas", "donde andas", "donde te metiste", "donde te escondes")) return { intent: "where", addressed };
   if (has(s, "resumen del dia", "resumen de hoy", "como estuvo mi dia", "resume mi dia")) return { intent: "summary", addressed };
   if (has(s, "a dormir", "reposo", "descansa", "duermete")) return { intent: "sleep", addressed };
   if (has(s, "escondete", "apartate", "quitate", "oculta")) return { intent: "hide", addressed };
@@ -90,4 +92,5 @@ export const VOICE_HELP: Record<Exclude<VoiceIntent, "unknown">, string[]> = {
   summary: ["Hocki, resumen del día"],
   hide: ["Hocki escóndete"],
   show: ["Hocki ven"],
+  where: ["¿Dónde estás, Hocki?"],
 };

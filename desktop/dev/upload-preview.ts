@@ -1,50 +1,20 @@
-// Dev harness: plays the whole drop sequence in a plain browser so the
-// choreography can be watched without an OLE drag. Not part of the app bundle.
-
 import { UploadCanvas } from "../src/upload/canvas";
 import { UploadSeq } from "../src/upload/sequence";
-import { State } from "../src/core/state";
 
-State.droppedFile = { name: "rapport-q3.pdf", path: "C:/tmp/rapport-q3.pdf" };
-
-const stage = document.getElementById("stage")!;
-const clock = document.getElementById("clock")!;
-
-const canvas = new UploadCanvas({
-  ask: () => (clock.textContent = "ASK clicked"),
-  cancel: () => (clock.textContent = "CANCEL clicked"),
-});
-canvas.el.classList.add("on");
-canvas.el.style.position = "absolute";
-canvas.el.style.left = "0";
-stage.append(canvas.el);
-
-// The cursor walks in from the right, settles over the box, then drops.
-// The whole thing restarts every 12 s so it can be watched (and screenshotted)
-// without reloading the page.
-const CYCLE = 12;
-let start = performance.now();
-let dropped = false;
-UploadSeq.enterZone(520, 96);
-
-function loop(now: number) {
-  let t = (now - start) / 1000;
-  if (t >= CYCLE) {
-    start = now;
-    t = 0;
-    dropped = false;
-    UploadSeq.enterZone(520, 96);
+const g = document.getElementById("g")!;
+const uc = new UploadCanvas({ ask() {}, cancel() {} });
+const dpr = 2;
+const c = (uc.el instanceof HTMLCanvasElement ? uc.el : uc.el.querySelector("canvas")) as HTMLCanvasElement;
+(async () => {
+  for (const [label, x, y] of [["Hocki espera (caja)", 140, 104], ["El cursor se acerca", 330, 100], ["Boca abierta", 90, 100]] as const) {
+    UploadSeq.enterZone(140, 104);
+    for (let i = 0; i < 40; i++) { UploadSeq.updateCursor(x, y); uc.draw(UploadSeq.frame(), i / 60); await new Promise((r) => setTimeout(r, 16)); }
+    const d = document.createElement("div"); d.className = "b";
+    const cap = document.createElement("div"); cap.textContent = label;
+    const copy = document.createElement("canvas"); copy.width = c.width; copy.height = c.height; copy.style.width = "640px"; copy.style.height = "176px";
+    copy.getContext("2d")!.drawImage(c, 0, 0);
+    d.append(cap, copy); g.append(d);
+    UploadSeq.deactivate();
   }
-  if (!dropped) {
-    const x = 520 - Math.min(1, t / 0.9) * 260;
-    UploadSeq.updateCursor(x, 96);
-    if (t >= 1.2) {
-      dropped = true;
-      UploadSeq.performDrop(2.4);
-    }
-  }
-  canvas.draw(UploadSeq.frame(), now / 1000);
-  clock.textContent = `t = ${t.toFixed(2)} s${dropped ? "  (dropped)" : "  (dragging)"}`;
-  requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
+  document.title = "listo";
+})();

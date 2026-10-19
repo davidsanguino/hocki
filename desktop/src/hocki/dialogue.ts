@@ -87,6 +87,9 @@ export function tipFor(p: Profession, rand: () => number = Math.random): string 
 // ── Conversación sin conexión ─────────────────────────────────────────────────
 
 export type ReplyAction = "stop" | "summary" | "sleep" | "hide" | "show" | "ask_ai" | null;
+/** Lo que Hocki responde a "¿Dónde estás, Hocki?". */
+export const WHERE_REPLY = "Acá estoy, jefe";
+
 export interface Reply { text: string; action: ReplyAction }
 
 const has = (t: string, ...ps: string[]) => ps.some((p) => t.includes(p));
@@ -105,6 +108,7 @@ export function reply(input: string, professionId: string, now: Date = new Date(
     case "sleep": return { text: "Me voy a reposo. Llámame cuando quieras.", action: "sleep" };
     case "hide": return { text: "Me aparto para no estorbar.", action: "hide" };
     case "show": return { text: "¡Aquí estoy!", action: "show" };
+    case "where": return { text: WHERE_REPLY, action: "show" };
     default: break;
   }
   const t = normalize(input);

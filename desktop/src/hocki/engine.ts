@@ -251,6 +251,8 @@ export class BotEngine {
   eyeOverride: EyeShape | null = null;
   eyeOverrideUntil = 0;
   permanentEye: EyeShape | null = null;
+  /** Ángulos de las orejas impuestos desde fuera (p. ej. la animación de inicio); null = según el estado. */
+  earOverride: [number, number] | null = null;
   permanentEmote: BotEmoteName | null = null;
   miniNextBehavior = 0;
 
@@ -273,6 +275,8 @@ export class BotEngine {
   private greetToken = 0;
   private lastAmbient = 0;
   private slapTimes: number[] = [];
+  /** Los cerditos pequeños miran al cursor; con esto en true vuelven a vagar al azar. */
+  miniWander = false;
   private miniLookTarget = { x: 0, y: 0 };
   private miniLookNextTime = 0;
 
@@ -614,8 +618,8 @@ export class BotEngine {
     if (this.state === "sleeping") { ty = 0; tp = -0.14; }
     if (this.state === "dizzy") { ty = Math.sin(t * 9) * 0.25; }
 
-    // Mini bots never follow the mouse — they wander.
-    if (this.isMini && !this.cfg.look && !this.cfg.scans && this.state !== "sleeping" && this.state !== "dizzy") {
+    // Mini bots follow the cursor (lookX/lookY, set by minibots.ts); wandering is opt-in.
+    if (this.isMini && this.miniWander && !this.cfg.look && !this.cfg.scans && this.state !== "sleeping" && this.state !== "dizzy") {
       if (n > this.miniLookNextTime) {
         this.miniLookTarget = {
           x: -0.88 + Math.random() * 1.76,
@@ -843,6 +847,7 @@ export class BotEngine {
 
   /** Ángulos objetivo de las orejas (rad) según el estado: positivo = paradas. */
   private earTargets(t: number): [number, number] {
+    if (this.earOverride) return this.earOverride;
     switch (this.state) {
       case "working": return [0.1 + 0.28 * (0.5 + 0.5 * Math.sin(t * 11)), 0.1 + 0.28 * (0.5 + 0.5 * Math.sin(t * 11 + 1))];
       case "thinking": return [0.15 + 0.2 * (0.5 + 0.5 * Math.sin(t * 5)), 0.15 + 0.2 * (0.5 + 0.5 * Math.sin(t * 5 + 1.2))];

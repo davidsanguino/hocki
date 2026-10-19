@@ -163,3 +163,115 @@ test("una orden que viene de la pantalla no abre apps", () => {
 test("el catálogo tiene destinos de apertura para los sistemas principales", () => {
   for (const a of APP_CATALOG) assert.ok(Object.keys(a.launch).length >= 3, a.id);
 });
+
+// ── "¿Dónde estás, Hocki?", escucha por voz y mirada ──────────────────────────
+
+import { parseVoice } from "../src/hocki/voice-commands.ts";
+import { WHERE_REPLY } from "../src/hocki/dialogue.ts";
+import { VoiceService } from "../src/hocki/voice-service.ts";
+import { gazeToward } from "../src/hocki/minibots.ts";
+
+test("'¿Dónde estás, Hocki?' en sus formas habituales", () => {
+  for (const f of ["¿Dónde estás, Hocki?", "Hocki, ¿dónde estás?", "dónde andas Hocki", "Hoki donde estas"]) {
+    assert.equal(parseVoice(f).intent, "where", f);
+  }
+  assert.equal(parseVoice("¿dónde estás?").intent, "unknown"); // sin nombrarlo no responde
+});
+
+test("responde 'Acá estoy, jefe' y pide mostrar la isla", () => {
+  const r = reply("¿Dónde estás Hocki?", "general", now, first);
+  assert.equal(r.text, "Acá estoy, jefe");
+  assert.equal(r.text, WHERE_REPLY);
+  assert.equal(r.action, "show");
+});
+
+function fakeRecognizer() {
+  const rec = { lang: "", continuous: false, interimResults: true, onresult: null, onend: null, onerror: null, starts: 0, stops: 0,
+    start() { this.starts++; }, stop() { this.stops++; } };
+  return rec;
+}
+const result = (text, isFinal = true) => ({ resultIndex: 0, results: [{ isFinal, 0: { transcript: text } }] });
+
+test("la escucha entrega solo frases finales, en español, y se reenciende sola", () => {
+  const rec = fakeRecognizer(); const heard = []; const timers = []; const states = [];
+  const svc = new VoiceService({ factory: () => rec, onHeard: (t) => heard.push(t), onState: (on, e) => states.push([on, e]),
+    setTimer: (fn) => timers.push(fn) });
+  assert.equal(svc.start(), true);
+  assert.equal(rec.lang, "es-CO"); assert.equal(rec.continuous, true); assert.equal(rec.interimResults, false);
+  rec.onresult(result("hocki fuera", false)); // parcial: se ignora
+  rec.onresult(result("  ¿Dónde estás Hocki?  "));
+  assert.deepEqual(heard, ["¿Dónde estás Hocki?"]);
+  rec.onend(); timers.pop()();                  // el motor se cortó: vuelve a encenderse
+  assert.equal(rec.starts, 2);
+  svc.stop();
+  rec.onend(); assert.equal(timers.length, 0);  // apagado: no reintenta
+  assert.equal(svc.on, false);
+  assert.deepEqual(states.at(-1), [false, undefined]);
+});
+
+test("si no hay reconocimiento de voz o niegan el micrófono, no se enciende", () => {
+  const none = new VoiceService({ factory: () => null, onHeard: () => {} });
+  assert.equal(none.supported, false); assert.equal(none.start(), false);
+  const rec = fakeRecognizer(); const states = [];
+  const svc = new VoiceService({ factory: () => rec, onHeard: () => {}, onState: (on, e) => states.push([on, e]) });
+  svc.start(); rec.onerror({ error: "not-allowed" });
+  assert.equal(svc.on, false);
+  assert.deepEqual(states.at(-1), [false, "not-allowed"]);
+});
+
+test("los cerditos miran hacia el cursor y sin cursor miran al frente", () => {
+  assert.deepEqual(gazeToward(100, 100, null), { lookX: 0, lookY: 0 });
+  const right = gazeToward(100, 100, { x: 600, y: 100 });
+  assert.ok(right.lookX > 0.9 && Math.abs(right.lookY) < 0.01);
+  const up = gazeToward(100, 100, { x: 100, y: -200 });
+  assert.ok(up.lookY > 0.9, "arriba = positivo");
+  const left = gazeToward(100, 100, { x: -400, y: 100 });
+  assert.ok(left.lookX < -0.9);
+});
+
+// ── Sonidos propios ───────────────────────────────────────────────────────────
+
+import { readFileSync, existsSync } from "node:fs";
+import { SOUND_NAMES } from "../src/core/sound.ts";
+
+test("cada sonido que Hocki pide existe como WAV propio de 16 bits y mono", () => {
+  for (const name of SOUND_NAMES) {
+    const file = new URL(`../sounds/${name}.wav`, import.meta.url);
+    assert.ok(existsSync(file), `falta sounds/${name}.wav`);
+    const b = readFileSync(file);
+    assert.equal(b.toString("ascii", 0, 4), "RIFF", name);
+    assert.equal(b.toString("ascii", 8, 12), "WAVE", name);
+    assert.equal(b.readUInt16LE(22), 1, `${name} no es mono`);
+    assert.equal(b.readUInt16LE(34), 16, `${name} no es de 16 bits`);
+    const seconds = (b.length - 44) / (b.readUInt32LE(24) * 2);
+    assert.ok(seconds > 0.01 && seconds < 6, `${name} dura ${seconds}s`);
+  }
+});
+
+test("la bienvenida suena lo mismo que dura la animación (≈4,6 s)", () => {
+  const b = readFileSync(new URL("../sounds/greeting.wav", import.meta.url));
+  const seconds = (b.length - 44) / (b.readUInt32LE(24) * 2);
+  assert.ok(Math.abs(seconds - 4.8) < 0.3, `${seconds}`);
+});
+
+test("no queda el nombre del personaje original en el código ni en los textos", async () => {
+  // Solo el aviso de licencia (NOTICE.md y LICENSE-COUCOU-MIT) puede nombrarlo, por obligación de la MIT.
+  const { readdirSync, readFileSync: read, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const dirs = ["src", "src-tauri/src", "dev", "scripts"];
+  const files = ["README.md", "index.html", "settings.html", "hocki.html", "package.json", "src-tauri/tauri.conf.json"];
+  const bad = [];
+  const scan = (p) => {
+    for (const name of readdirSync(p)) {
+      const full = join(p, name);
+      if (statSync(full).isDirectory()) scan(full);
+      else if (/\.(ts|rs|json|html|css|md|mjs|py)$/.test(name)) check(full);
+    }
+  };
+  const check = (f) => { if (/coucou|mochi/i.test(read(f, "utf8"))) bad.push(f); };
+  for (const d of dirs) scan(join(root, d));
+  for (const f of files) check(join(root, f));
+  assert.deepEqual(bad, []);
+});

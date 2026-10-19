@@ -50,6 +50,69 @@ function bodyPath(ctx: CanvasRenderingContext2D, m: number, R: number): { rx: nu
   return { rx, ry };
 }
 
+const PIG_OUTER = "rgb(236,143,170)";
+const PIG_INNER = "rgb(241,160,180)";
+
+/** Orejas y cola rizada de Hocki (las mismas formas que dibuja el motor del personaje). */
+function drawPigBack(ctx: CanvasRenderingContext2D, R: number, rx: number, ry: number, away: number) {
+  if (away < 0.05) return;
+  ctx.save();
+  ctx.globalAlpha = away;
+  ctx.save();
+  ctx.translate(rx * 0.92, ry * 0.3);
+  ctx.strokeStyle = PIG_OUTER;
+  ctx.lineWidth = R * 0.1;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(R * 0.36, -R * 0.02, R * 0.4, -R * 0.36, R * 0.14, -R * 0.32);
+  ctx.bezierCurveTo(-R * 0.04, -R * 0.29, 0, -R * 0.1, R * 0.12, -R * 0.13);
+  ctx.stroke();
+  ctx.restore();
+  for (const sd of [-1, 1]) {
+    ctx.save();
+    ctx.translate(sd * rx * 0.6, -ry * 0.66);
+    ctx.rotate(-sd * 0.1);
+    ctx.scale(sd, 1);
+    ctx.beginPath();
+    ctx.moveTo(-R * 0.12, -R * 0.06);
+    ctx.quadraticCurveTo(R * 0.62, -R * 0.2, R * 0.66, R * 0.46);
+    ctx.quadraticCurveTo(R * 0.3, R * 0.5, R * 0.04, R * 0.2);
+    ctx.closePath();
+    ctx.fillStyle = PIG_OUTER;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(R * 0.02, 0);
+    ctx.quadraticCurveTo(R * 0.46, -R * 0.06, R * 0.5, R * 0.32);
+    ctx.quadraticCurveTo(R * 0.26, R * 0.34, R * 0.08, R * 0.16);
+    ctx.closePath();
+    ctx.fillStyle = PIG_INNER;
+    ctx.globalAlpha = away * 0.7;
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/** Hocico con dos fosas, debajo de los ojos. */
+function drawSnout(ctx: CanvasRenderingContext2D, R: number, ry: number, alpha: number) {
+  if (alpha < 0.05) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(0, ry * 0.62);
+  ctx.fillStyle = "rgb(240,146,172)";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, R * 0.26, R * 0.17, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(150,50,80,0.85)";
+  for (const sd of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(sd * R * 0.085, 0, R * 0.04, R * 0.06, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function text(
   ctx: CanvasRenderingContext2D,
   s: string,
@@ -370,10 +433,14 @@ export class UploadCanvas {
 
     const { rx, ry } = bodyPath(ctx, f.morph, R);
 
-    // Body.
+    // Orejas y cola: detrás del cuerpo, y se pliegan al volverse caja.
+    drawPigBack(ctx, R, rx, ry, 1 - mc);
+
+    // Body: rosa de cerdito.
+    bodyPath(ctx, f.morph, R);
     const bg = ctx.createLinearGradient(rx * 0.7, -ry * 0.9, -rx * 0.8, ry * 0.9);
-    bg.addColorStop(0, "#EDEDEF");
-    bg.addColorStop(1, "#C4C5CA");
+    bg.addColorStop(0, "#F9C2D0");
+    bg.addColorStop(1, "#F1A0B4");
     ctx.fillStyle = bg;
     ctx.fill();
 
@@ -425,6 +492,9 @@ export class UploadCanvas {
         ctx.stroke();
       }
     }
+
+    // Hocico: se desvanece cuando se vuelve caja.
+    drawSnout(ctx, R, ry, 1 - Math.min(1, mc * 1.6));
 
     // Eyes.
     const ew = R * 0.25;
