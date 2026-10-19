@@ -1,6 +1,7 @@
 // The island: DOM shell, sizing animation, Hocki placement, mouse handling.
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
+import { brain, permissions } from "../hocki/runtime";
 import { Tracked, Spring, clamp } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
@@ -15,7 +16,10 @@ import { State } from "../core/state";
 import { SPOTIFY_ID, islandDances } from "../core/spotify";
 import { BotEngine, hexToRGB } from "../hocki/engine";
 import { Greeting } from "../hocki/greeting";
-import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
+import { createMiniBot, pruneMiniBots, setMiniCursor, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
+import { Speaker, browserBackend, reply } from "../hocki/dialogue";
+import { parseVoice } from "../hocki/voice-commands";
+import { VoiceService, browserRecognizerFactory } from "../hocki/voice-service";
 import { SeasonCache, parseOutfit } from "../hocki/wardrobe";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
@@ -73,6 +77,16 @@ export class Island {
 
   private engine = new BotEngine();
   private greeting = new Greeting();
+  private speaker = new Speaker(browserBackend() ?? { speak() {}, cancel() {} });
+  private voice = new VoiceService({
+    factory: browserRecognizerFactory(),
+    onHeard: (text) => this.onVoiceHeard(text),
+    onState: (on, error) => {
+      State.voiceOn = on;
+      if (error) console.warn(`Hocki: la escucha por voz no pudo activarse (${error})`);
+      State.notify();
+    },
+  });
   private greetingShown = false;
   private seasons = new SeasonCache();
 
@@ -124,6 +138,8 @@ export class Island {
     this.wireFsm();
     this.wireInput();
     this.engine.onDizzy = () => this.handleDizzy();
+    // Segundo plano: cada segundo revisa si toca algún recordatorio o rutina.
+    setInterval(() => this.backgroundTick(), 1000);
     this.greeting.onComplete = () => {
       this.fsm.greetComplete();
       this.onGreetingDone?.();
@@ -219,6 +235,7 @@ export class Island {
         void Bridge.approvalDecline(req.requestId);
         this.closeApproval();
       },
+      toggleVoice: () => this.toggleVoice(),
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -408,6 +425,63 @@ export class Island {
     State.notify();
   }
 
+  /** Entrega lo que las tareas en segundo plano dejaron: aparece en el chat, suena y Hocki avisa. */
+  private backgroundTick() {
+    let fresh;
+    try { fresh = brain.tick(); } catch (e) { console.warn("Hocki: fallo en tareas de fondo", e); return; }
+    if (!fresh.length) return;
+    for (const o of fresh) {
+      State.chatHistory.push({ id: Date.now() + Math.floor(Math.random() * 1000), role: "assistant", content: o.text });
+      this.speaker.say(o.text, { busy: false });
+    }
+    brain.jobs.markAllRead();
+    brain.save();
+    Sound.play("finish");
+    this.engine.greet();
+    State.notify();
+  }
+
+  /** Botón del micrófono: enciende o apaga la escucha por voz (opcional). */
+  private toggleVoice() {
+    if (this.voice.on) {
+      this.voice.stop();
+      this.speaker.halt();
+      return;
+    }
+    if (this.voice.start()) {
+      this.speaker.resume();
+      this.speaker.settings.enabled = true;
+    }
+  }
+
+  /** Lo que se oyó: solo reacciona si le hablan a Hocki (o si le dicen que pare). */
+  private onVoiceHeard(text: string) {
+    const cmd = parseVoice(text);
+    if (!cmd.addressed && cmd.intent !== "stop") return;
+    const r = reply(text, "general");
+    if (r.action === "ask_ai") return; // aún no está conectado a un asistente de IA
+    this.speaker.say(r.text, { busy: false });
+    switch (r.action) {
+      case "show":
+        if (permissions.isKilled) brain.resumeAll(); // la persona lo llamó de nuevo
+        // "¿Dónde estás, Hocki?" → aparece la isla y saluda.
+        this.alert("overview");
+        this.engine.greet();
+        break;
+      case "stop":
+        brain.stopAll(); // pausa también las tareas en segundo plano
+        this.collapse();
+        this.voice.stop();
+        break;
+      case "hide":
+      case "sleep":
+        this.collapse();
+        break;
+      default:
+        break;
+    }
+  }
+
   collapse() {
     // A waiting card is only ever folded, never dropped by a close.
     if (State.pendingApproval) {
@@ -574,6 +648,7 @@ export class Island {
     State.promptContext = { kind: "file", name, path };
     State.chatHistory = [];
     void Bridge.chatReset();
+    brain.newConversation();
 
     UploadSeq.performDrop(State.uploadDuration);
     this.uploadTens = 0;
@@ -832,6 +907,7 @@ export class Island {
       y = -10_000;
     }
     State.mouse = { x, y };
+    setMiniCursor(x, y);
     const rect = this.islandRect();
     State.mouseInIsland = { x: x - rect.x, y: y - rect.y };
 

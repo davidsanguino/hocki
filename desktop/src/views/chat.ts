@@ -14,6 +14,7 @@ import {
   activeModel, pickModel, providerDef, visibleProviders, withModel, type ProviderDef,
 } from "../core/providers";
 import { Sound } from "../core/sound";
+import { brain } from "../hocki/runtime";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
 import { N_, t, tl } from "../i18n/i18n";
@@ -283,7 +284,10 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
 
     try {
-      const reply = await Bridge.chatSend(query, context);
+      // Lo que Hocki resuelve solo (recordar, programar, listar…) no sale del equipo.
+      const local = brain.handle(query);
+      const reply = local ?? (await Bridge.chatSend(brain.wrap(query), context));
+      if (!local) brain.afterTurn(query, reply.text);
       State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");

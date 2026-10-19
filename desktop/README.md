@@ -15,7 +15,7 @@ Approve Claude Code permissions, watch your session work, drop a file, chat with
 
 </div>
 
-<img src="screenshots/greeting.png" width="640" alt="Hocki waving hello at launch">
+<img src="screenshots/greeting.png" width="640" alt="Hocki sale del notch, trota, resopla, se sienta y saluda">
 
 ---
 
@@ -42,11 +42,8 @@ You can also [build it yourself](#build-it-yourself).
 
 ## Using it
 
-<img src="screenshots/compact.png" width="292" alt="The compact island, with the integration pills as mini Hockis">
-<img src="screenshots/overview.png" width="640" alt="The overview: the focused integration on the left, the other pills on the right">
-<img src="screenshots/approval.png" width="640" alt="A Claude Code permission request, with Deny and Allow">
-<img src="screenshots/chat.png" width="640" alt="Chatting with Claude from the island">
-<img src="screenshots/drop.png" width="640" alt="Hocki turned into a box, waiting for a file">
+<img src="screenshots/compact.png" width="640" alt="Las integraciones como mini Hockis: rosados con un resplandor, y del color de la integración al tocarlos">
+<img src="screenshots/drop.png" width="640" alt="Hocki convertido en una cajita rosada, esperando un archivo">
 
 | What you do | What happens |
 |---|---|
@@ -141,7 +138,6 @@ declare still shows up, for as long as it runs.
 
 ## Claude Code
 
-<img src="screenshots/settings.png" width="562" alt="The settings window">
 
 Open **Settings… → Claude Code → Install hooks…**. You get the exact diff of what
 will change in `%USERPROFILE%\.claude\settings.json`, the path of the dated backup
@@ -615,3 +611,14 @@ What changes on Linux:
     still can be). There, and for a session under tmux, screen or ssh, whose
     terminal is no ancestor, the folder opens in VS Code as before.
 - No **Claude Desktop** pill: the Claude app has no Linux build.
+
+## Memoria, registro y segundo plano
+
+Hocki puede recordar, llevar un registro y trabajar entre mensajes. Todo se guarda solo en el dispositivo.
+
+- Memoria (apagada de fábrica): "activa tu memoria", "recuerda que…", "qué recuerdas", "olvida todo". Nunca guarda claves ni tarjetas.
+- Registro: "registro de hoy", "qué pasó mientras no estaba".
+- Tareas: "recuérdame llamar a mamá en 10 minutos", "recuérdame … mañana a las 8", "cada 30 minutos", "qué tengo programado", "cancela todo".
+- Oficio: "soy abogada", "soy contador"… y "activa mis rutinas" programa recordatorios propios del oficio.
+- Las acciones sensibles programadas piden tu autorización; "Hocki fuera" pausa todo.
+- Las tareas corren mientras Hocki está abierto (los teléfonos limitan el segundo plano).

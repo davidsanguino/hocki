@@ -7,6 +7,7 @@
 // island has the keyboard: it takes it for the chat, and when a global
 // shortcut opens it.
 
+import { brain } from "../hocki/runtime";
 import { Bridge, onEvent } from "../core/bridge";
 import type { BotEmoteName, IslandViewName } from "../core/layout";
 import { cyclePill, islandKeyAction, navigate, pillByNumber, type IslandKeyAction } from "../core/shortcuts";
@@ -169,6 +170,7 @@ export function runIslandKey(host: ShortcutHost, action: IslandKeyAction) {
       State.droppedFile = null;
       State.promptContext = null;
       void Bridge.chatReset();
+      brain.newConversation();
       Sound.play("blip");
       host.setView("prompt");
       break;
