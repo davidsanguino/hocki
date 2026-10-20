@@ -22,7 +22,7 @@ import { Speaker, browserBackend, reply, speakable, phraseFor, tipFor } from "..
 import { professionById } from "../hocki/professions";
 import { browserKV } from "../hocki/storage";
 import { parseVoice, stripName } from "../hocki/voice-commands";
-import { VoiceService, browserRecognizerFactory } from "../hocki/voice-service";
+import { VoiceService, browserRecognizerFactory, voiceErrorText } from "../hocki/voice-service";
 import { SeasonCache, parseOutfit } from "../hocki/wardrobe";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
@@ -86,7 +86,11 @@ export class Island {
     onHeard: (text) => this.onVoiceHeard(text),
     onState: (on, error) => {
       State.voiceOn = on;
-      if (error) console.warn(`Hocki: la escucha por voz no pudo activarse (${error})`);
+      if (error) {
+        console.warn(`Hocki: la escucha por voz no pudo activarse (${error})`);
+        State.chatHistory.push({ id: Date.now(), role: "assistant", content: voiceErrorText(error) });
+        window.setTimeout(() => this.alert("prompt"), 200);
+      }
       State.notify();
     },
   });
@@ -148,8 +152,11 @@ export class Island {
     window.addEventListener("hocki-action", (e) => this.doAction((e as CustomEvent<HockiAction>).detail));
     // Si la persona pidió que lo escuche siempre, vuelve a encender el micrófono al arrancar.
     if (this.kv.get("hocki.listen") === "on") window.setTimeout(() => { if (!this.voice.on) this.toggleVoice(); }, 3000);
-    // Primera vez: Hocki se presenta y explica qué puede hacer.
-    if (!brain.journal.list({ kind: "system" }).some((e) => e.title === "Bienvenida")) {
+    // Primera vez: Hocki se presenta y le pregunta su nombre y su oficio para adaptarse a cualquier persona.
+    const first = brain.onboardingPrompt();
+    if (first) {
+      State.chatHistory.push({ id: Date.now(), role: "assistant", content: first });
+    } else if (!brain.journal.list({ kind: "system" }).some((e) => e.title === "Bienvenida")) {
       brain.journal.add("system", "Bienvenida");
       brain.save();
       State.chatHistory.push({ id: Date.now(), role: "assistant", content: `¡Hola, soy Hocki!\n${HELP_TEXT}` });
@@ -157,6 +164,8 @@ export class Island {
     this.greeting.onComplete = () => {
       this.fsm.greetComplete();
       this.onGreetingDone?.();
+      // Si es la primera vez, deja el chat abierto con la pregunta de Hocki.
+      if (brain.onboard !== "done") window.setTimeout(() => this.alert("prompt"), 600);
     };
     State.subscribe(() => {
       this.dirty = true;

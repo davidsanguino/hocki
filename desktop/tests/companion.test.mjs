@@ -161,7 +161,8 @@ test("una orden que viene de la pantalla no abre apps", () => {
 });
 
 test("el catálogo tiene destinos de apertura para los sistemas principales", () => {
-  for (const a of APP_CATALOG) assert.ok(Object.keys(a.launch).length >= 3, a.id);
+  // Las de escritorio (diseño, 3D, Office…) se encuentran por el nombre de su acceso directo (find).
+  for (const a of APP_CATALOG) assert.ok(Object.keys(a.launch).length >= 3 || (a.find && a.find.length), a.id);
 });
 
 // ── "¿Dónde estás, Hocki?", escucha por voz y mirada ──────────────────────────

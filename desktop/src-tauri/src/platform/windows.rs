@@ -275,6 +275,57 @@ pub fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }
 
+/// Opens an installed app through its Start-menu shortcut: every word of `keywords`
+/// must be in the shortcut's name (the shortest such name wins, so "Word" beats "WordPad").
+/// Nothing is run through a shell: the shortcut found on disk is handed to Explorer.
+pub fn launch_shortcut(keywords: &[String]) -> bool {
+    let words: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).collect();
+    if words.is_empty() {
+        return false;
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramData", "APPDATA"] {
+        if let Some(base) = std::env::var_os(var) {
+            roots.push(PathBuf::from(base).join("Microsoft").join("Windows").join("Start Menu").join("Programs"));
+        }
+    }
+    let mut best: Option<(usize, PathBuf)> = None;
+    for root in &roots {
+        collect_shortcuts(root, &words, 0, &mut best);
+    }
+    match best {
+        Some((_, path)) => Command::new("explorer.exe").arg(path).spawn().is_ok(),
+        None => false,
+    }
+}
+
+fn collect_shortcuts(dir: &std::path::Path, words: &[String], depth: u8, best: &mut Option<(usize, PathBuf)>) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_shortcuts(&path, words, depth + 1, best);
+            continue;
+        }
+        let is_lnk = path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("lnk")).unwrap_or(false);
+        if !is_lnk {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let name = stem.to_lowercase();
+        let skip = ["uninstall", "desinstal", "readme", "license", "licencia", "help", "ayuda", "manual", "documentation"];
+        if skip.iter().any(|w| name.contains(w)) || !words.iter().all(|w| name.contains(w.as_str())) {
+            continue;
+        }
+        if best.as_ref().map(|(len, _)| name.len() < *len).unwrap_or(true) {
+            *best = Some((name.len(), path));
+        }
+    }
+}
+
 /// True while any keyboard key is held. Only the rhythm of typing is seen
 /// (so Hocki steps aside), never which key it is: nothing is read or kept.
 pub fn any_key_down() -> bool {

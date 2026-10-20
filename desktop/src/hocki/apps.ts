@@ -17,33 +17,80 @@ export interface AppDef {
   category: string;
   /** Cómo se abre en cada sistema (comando, esquema URL o paquete). */
   launch: Partial<Record<OS, string>>;
+  /** Palabras del nombre del acceso directo del menú Inicio (escritorio): así se encuentra la app instalada. */
+  find?: string[];
+  /** Otras formas de nombrarla al hablar ("ps", "ppt"…). */
+  aliases?: string[];
   sensitive?: boolean;
   custom?: boolean;
 }
 
 export const APP_CATALOG: AppDef[] = [
-  { id: "whatsapp", name: "WhatsApp", category: "mensajería",
+  { id: "whatsapp", find: ["whatsapp"], name: "WhatsApp", category: "mensajería",
     launch: { windows: "whatsapp:", macos: "whatsapp://", android: "com.whatsapp", ios: "whatsapp://" } },
-  { id: "telegram", name: "Telegram", category: "mensajería",
+  { id: "telegram", find: ["telegram"], name: "Telegram", category: "mensajería",
     launch: { windows: "tg:", macos: "tg://", linux: "telegram-desktop", android: "org.telegram.messenger", ios: "tg://" } },
-  { id: "chrome", name: "Google Chrome", category: "navegador",
+  { id: "chrome", find: ["chrome"], name: "Google Chrome", category: "navegador",
     launch: { windows: "chrome", macos: "Google Chrome", linux: "google-chrome", android: "com.android.chrome", ios: "googlechromes://" } },
-  { id: "word", name: "Word", category: "ofimática",
+  { id: "word", find: ["word"], aliases: ["microsoft word"], name: "Word", category: "ofimática",
     launch: { windows: "winword", macos: "Microsoft Word", android: "com.microsoft.office.word", ios: "ms-word:" } },
-  { id: "excel", name: "Excel", category: "ofimática",
+  { id: "excel", find: ["excel"], name: "Excel", category: "ofimática",
     launch: { windows: "excel", macos: "Microsoft Excel", android: "com.microsoft.office.excel", ios: "ms-excel:" } },
-  { id: "correo", name: "Correo", category: "correo",
+  { id: "correo", find: ["outlook"], name: "Correo", category: "correo",
     launch: { windows: "mailto:", macos: "Mail", android: "com.google.android.gm", ios: "googlegmail://" } },
-  { id: "calendario", name: "Calendario", category: "productividad",
+  { id: "calendario", find: ["outlook"], name: "Calendario", category: "productividad",
     launch: { windows: "outlookcal:", macos: "Calendar", android: "com.google.android.calendar", ios: "calshow://" } },
-  { id: "mapas", name: "Mapas", category: "navegación",
+  { id: "mapas", find: ["maps"], name: "Mapas", category: "navegación",
     launch: { windows: "bingmaps:", macos: "Maps", android: "com.google.android.apps.maps", ios: "maps://" } },
-  { id: "spotify", name: "Spotify", category: "música",
+  { id: "spotify", find: ["spotify"], name: "Spotify", category: "música",
     launch: { windows: "spotify:", macos: "spotify:", linux: "spotify", android: "com.spotify.music", ios: "spotify:" } },
-  { id: "calculadora", name: "Calculadora", category: "utilidades",
+  { id: "calculadora", find: ["calculadora"], name: "Calculadora", category: "utilidades",
     launch: { windows: "calc", macos: "Calculator", linux: "gnome-calculator", android: "com.google.android.calculator" } },
-  { id: "notas", name: "Bloc de notas", category: "utilidades",
+  { id: "notas", find: ["bloc de notas"], name: "Bloc de notas", category: "utilidades",
     launch: { windows: "notepad", macos: "TextEdit", linux: "gedit", ios: "mobilenotes://" } },
+  { id: "photoshop", name: "Photoshop", category: "Adobe", find: ["photoshop"], aliases: ["ps"], launch: {} },
+  { id: "illustrator", name: "Illustrator", category: "Adobe", find: ["illustrator"], aliases: ["ai"], launch: {} },
+  { id: "premiere", name: "Premiere Pro", category: "Adobe", find: ["premiere"], aliases: ["premiere pro"], launch: {} },
+  { id: "aftereffects", name: "After Effects", category: "Adobe", find: ["after effects"], aliases: ["ae"], launch: {} },
+  { id: "audition", name: "Audition", category: "Adobe", find: ["audition"], launch: {} },
+  { id: "indesign", name: "InDesign", category: "Adobe", find: ["indesign"], launch: {} },
+  { id: "lightroom", name: "Lightroom", category: "Adobe", find: ["lightroom"], launch: {} },
+  { id: "acrobat", name: "Acrobat", category: "Adobe", find: ["acrobat"], aliases: ["adobe acrobat","pdf"], launch: {} },
+  { id: "mediaencoder", name: "Media Encoder", category: "Adobe", find: ["media encoder"], launch: {} },
+  { id: "animate", name: "Animate", category: "Adobe", find: ["animate"], launch: {} },
+  { id: "creativecloud", name: "Creative Cloud", category: "Adobe", find: ["creative cloud"], aliases: ["adobe"], launch: {} },
+  { id: "blender", name: "Blender", category: "3D", find: ["blender"], launch: {} },
+  { id: "maya", name: "Maya", category: "3D", find: ["maya"], aliases: ["autodesk maya","3d maya"], launch: {} },
+  { id: "3dsmax", name: "3ds Max", category: "3D", find: ["3ds max"], aliases: ["3dsmax"], launch: {} },
+  { id: "sketchup", name: "SketchUp", category: "3D", find: ["sketchup"], launch: {} },
+  { id: "zbrush", name: "ZBrush", category: "3D", find: ["zbrush"], launch: {} },
+  { id: "cinema4d", name: "Cinema 4D", category: "3D", find: ["cinema 4d"], launch: {} },
+  { id: "rhino", name: "Rhino", category: "3D", find: ["rhino"], launch: {} },
+  { id: "unreal", name: "Unreal Engine", category: "3D", find: ["unreal"], launch: {} },
+  { id: "autocad", name: "AutoCAD", category: "CAD", find: ["autocad"], aliases: ["acad"], launch: {} },
+  { id: "revit", name: "Revit", category: "CAD", find: ["revit"], launch: {} },
+  { id: "fusion360", name: "Fusion 360", category: "CAD", find: ["fusion"], aliases: ["fusion"], launch: {} },
+  { id: "davinci", name: "DaVinci Resolve", category: "audio y video", find: ["davinci resolve"], aliases: ["resolve","davinci"], launch: {} },
+  { id: "audacity", name: "Audacity", category: "audio y video", find: ["audacity"], launch: {} },
+  { id: "obs", name: "OBS Studio", category: "audio y video", find: ["obs studio"], aliases: ["obs"], launch: {} },
+  { id: "flstudio", name: "FL Studio", category: "audio y video", find: ["fl studio"], launch: {} },
+  { id: "ableton", name: "Ableton Live", category: "audio y video", find: ["ableton"], launch: {} },
+  { id: "capcut", name: "CapCut", category: "audio y video", find: ["capcut"], launch: {} },
+  { id: "vlc", name: "VLC", category: "audio y video", find: ["vlc"], launch: {} },
+  { id: "figma", name: "Figma", category: "diseño", find: ["figma"], launch: {} },
+  { id: "gimp", name: "GIMP", category: "diseño", find: ["gimp"], launch: {} },
+  { id: "inkscape", name: "Inkscape", category: "diseño", find: ["inkscape"], launch: {} },
+  { id: "krita", name: "Krita", category: "diseño", find: ["krita"], launch: {} },
+  { id: "coreldraw", name: "CorelDRAW", category: "diseño", find: ["coreldraw"], aliases: ["corel"], launch: {} },
+  { id: "affinity", name: "Affinity", category: "diseño", find: ["affinity"], launch: {} },
+  { id: "powerpoint", name: "PowerPoint", category: "ofimática", find: ["powerpoint"], aliases: ["power point","ppt","presentaciones"], launch: {} },
+  { id: "outlook", name: "Outlook", category: "ofimática", find: ["outlook"], launch: {} },
+  { id: "onenote", name: "OneNote", category: "ofimática", find: ["onenote"], launch: {} },
+  { id: "access", name: "Access", category: "ofimática", find: ["access"], launch: {} },
+  { id: "publisher", name: "Publisher", category: "ofimática", find: ["publisher"], launch: {} },
+  { id: "visio", name: "Visio", category: "ofimática", find: ["visio"], launch: {} },
+  { id: "teams", name: "Teams", category: "ofimática", find: ["teams"], launch: {} },
+  { id: "vscode", name: "Visual Studio Code", category: "desarrollo", find: ["visual studio code"], aliases: ["vs code","vscode","code"], launch: {} },
 ];
 
 const SENSITIVE_HINTS = [
@@ -111,6 +158,7 @@ export class AppAutomation {
     for (const [tid, t] of this.tasks) if (t.appId === id) this.tasks.delete(tid);
   }
   isGranted(id: string) { return this.granted.has(id); }
+  grantedIds(): string[] { return [...this.granted]; }
 
   assignTask(task: AppTask): boolean {
     if (!this.granted.has(task.appId)) return false;
@@ -129,7 +177,8 @@ export class AppAutomation {
     const app = this.apps.get(appId);
     const gate = this.gate(app);
     if (gate) return gate;
-    if (!this.launchTarget(appId)) return deny("Esa app no tiene forma de abrirse en este sistema");
+    const desktop = this.os === "windows" || this.os === "macos" || this.os === "linux";
+    if (!this.launchTarget(appId) && !(desktop && app!.find)) return deny("Esa app no tiene forma de abrirse en este sistema");
     const request: ActionRequest = { kind: "open_app", summary: `Abrir ${app!.name}`, fingerprint: `open:${appId}`, origin };
     return this.finish(request, app!, ctx);
   }
@@ -170,4 +219,23 @@ export class AppAutomation {
 
 function deny(reason: string): AppResult {
   return { decision: { type: "deny", reason }, request: null };
+}
+
+/** Cómo se dice una app en una frase: nombre, id y alias, sin tildes. */
+export function appNames(a: AppDef): string[] {
+  return [a.name, a.id, ...(a.aliases ?? [])].map(plain);
+}
+
+/** La app nombrada en una frase ("abre photoshop", "ábreme el power point"); gana el nombre más largo. */
+export function matchApp(text: string, apps: readonly AppDef[]): AppDef | null {
+  const t = plain(text);
+  let best: { app: AppDef; len: number } | null = null;
+  for (const a of apps) {
+    for (const n of appNames(a)) {
+      if (n.length < 2) continue;
+      const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(t) && (!best || n.length > best.len)) best = { app: a, len: n.length };
+    }
+  }
+  return best?.app ?? null;
 }

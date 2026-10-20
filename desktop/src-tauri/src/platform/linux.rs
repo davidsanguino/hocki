@@ -312,6 +312,11 @@ pub fn any_key_down() -> bool {
     false
 }
 
+/// Opening apps by name is only built for Windows so far.
+pub fn launch_shortcut(_keywords: &[String]) -> bool {
+    false
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 /// The few gtk-layer-shell calls we need, straight from the C library.

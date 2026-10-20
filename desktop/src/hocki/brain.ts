@@ -11,7 +11,9 @@ import { PROFESSIONS, professionById, type Profession } from "./professions";
 import { parseJobRequest } from "./schedule-nl";
 import { buildSummary, type DayEvent } from "./daily-summary";
 import { normalize } from "./voice-commands";
-import type { ActionRequest, PermissionEngine } from "./permissions";
+import type { ActionRequest, Grants, Level, PermissionEngine } from "./permissions";
+import { matchApp, type AppAutomation, type AppDef } from "./apps";
+import { TOOLS, toolById, toolHelp, toolPrompt, type Tool } from "./tools";
 import type { KV } from "./storage";
 
 const KEY = "hocki.brain.v1";
@@ -45,7 +47,13 @@ export function matchProfession(text: string): Profession | null {
   return null;
 }
 
+export type OnboardStep = "name" | "job" | "done";
+
 export interface BrainState {
+  onboard?: OnboardStep;
+  tool?: string;
+  grants?: Grants;
+  apps?: string[];
   profession: string;
   name?: string;
   memory: MemoryData;
@@ -60,6 +68,10 @@ export interface BrainDeps {
   /** Ejecuta de verdad una acción ya autorizada. */
   execute?: (r: ActionRequest) => void;
   resting?: () => boolean;
+  /** Catálogo de apps y sus permisos; sin él, Hocki no abre aplicaciones. */
+  apps?: AppAutomation;
+  /** Abre de verdad una app ya autorizada (lo pone cada plataforma). */
+  launch?: (app: AppDef) => void;
 }
 
 export const HELP_TEXT = [
@@ -76,12 +88,19 @@ export const HELP_TEXT = [
 export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off";
 export interface LocalReply { text: string; action?: HockiAction }
 
+const HINT_AFTER = "\nSi quieres, dime «activa mis rutinas» para recordatorios de tu oficio y «activa tu memoria» para que recuerde lo que me pidas. «comandos» muestra todo.";
 const list = (items: string[]) => items.map((x) => `• ${x}`).join("\n");
 const fmtWhen = (t: number | null) => (t == null ? "—" : new Date(t).toLocaleString("es-CO", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }));
 
 export class HockiBrain {
   profession: string = "general";
   name?: string;
+  /** Primera vez: Hocki pregunta nombre y oficio. Quien ya tenía datos guardados no lo repite. */
+  onboard: OnboardStep;
+  private jobTries = 0;
+  /** Herramienta con la que se está trabajando (Blender, Excel…): da contexto a la IA. */
+  tool?: string;
+  private pendingApp: string | null = null;
   memory: MemoryStore;
   journal: Journal;
   jobs: JobRunner;
@@ -94,6 +113,10 @@ export class HockiBrain {
     this.now = deps.now ?? (() => Date.now());
     this.profession = saved?.profession ?? "general";
     this.name = saved?.name;
+    this.onboard = saved?.onboard ?? (saved ? "done" : "name");
+    this.tool = saved?.tool;
+    if (saved?.grants) { deps.engine.grants.level = saved.grants.level; deps.engine.grants.kinds = { ...saved.grants.kinds }; }
+    for (const id of saved?.apps ?? []) deps.apps?.grantApp(id);
     this.memory = new MemoryStore(this.now, saved?.memory);
     this.journal = new Journal(this.now, saved?.journal ?? []);
     this.jobs = new JobRunner({
@@ -110,7 +133,7 @@ export class HockiBrain {
   }
 
   save() {
-    const s: BrainState = { profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
+    const s: BrainState = { onboard: this.onboard, tool: this.tool, grants: this.d.engine.grants, apps: this.d.apps?.grantedIds(), profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
     this.d.kv.set(KEY, JSON.stringify(s));
   }
 
@@ -143,7 +166,59 @@ export class HockiBrain {
     return r;
   }
 
+  // ── Primera vez ────────────────────────────────────────────────────────────
+
+  /** Lo primero que Hocki le dice a quien lo abre por primera vez; null si ya se conocen. */
+  onboardingPrompt(): string | null {
+    if (this.onboard === "done") return null;
+    return this.onboard === "name"
+      ? "¡Hola, soy Hocki, tu compañero! Para ayudarte mejor, ¿cómo te llamas? (Si prefieres, escribe «omitir».)"
+      : `¿A qué te dedicas${this.name ? `, ${this.name}` : ""}? Dime tu profesión u oficio y me adapto a ti.`;
+  }
+
+  private onboard_(text: string, t: string): LocalReply | null {
+    if (/^(omitir|saltar|luego|despues|no gracias|ahora no)\b/.test(t)) {
+      this.onboard = "done";
+      return { text: `Sin problema. Cuando quieras dime «soy abogada», «soy docente»… o escribe «comandos» para ver todo lo que puedo hacer.` };
+    }
+    // Una pregunta o una frase larga no es un nombre ni un oficio: se deja pasar al asistente y se omite la bienvenida.
+    if (/\?/.test(text) || text.trim().split(/\s+/).length > 5) { this.onboard = "done"; return null; }
+    if (this.onboard === "name") {
+      const m = text.match(/^(?:me llamo|mi nombre es|soy|yo soy|llamame)?\s*([\p{L}][\p{L}'-]{1,24})/iu);
+      const guess = matchProfession(text);
+      if (guess && /^(soy|yo soy)\b/i.test(text.trim())) {
+        // Contestó con su oficio en vez de su nombre: se anota y se pregunta el nombre luego.
+        this.profession = guess.id;
+        return { text: `¡Qué bien, ${guess.name.toLowerCase()}! ¿Y cómo te llamas?` };
+      }
+      if (!m) return { text: "No alcancé a entenderte. ¿Cómo te llamas? (o escribe «omitir»)" };
+      this.name = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      this.onboard = this.profession !== "general" ? "done" : "job";
+      return this.onboard === "done"
+        ? { text: `Mucho gusto, ${this.name}. ${this.professionProfile.hello ?? ""}`.trim() + HINT_AFTER }
+        : { text: `Mucho gusto, ${this.name}. ${this.onboardingPrompt()}` };
+    }
+    // step "job"
+    const p = matchProfession(text);
+    if (p) {
+      this.profession = p.id;
+      this.onboard = "done";
+      return { text: `¡Listo! Desde ahora te ayudo como ${p.name.toLowerCase()}. ${p.pitch} ${p.hello ?? ""}`.trim() + HINT_AFTER };
+    }
+    this.jobTries++;
+    if (this.jobTries >= 2) {
+      this.onboard = "done";
+      return { text: "Por ahora te ayudo en general. Cuando quieras, dime «soy …» y tu profesión, y me adapto." + HINT_AFTER };
+    }
+    const ex = ["abogado", "médico", "docente", "contador", "ingeniero", "enfermera", "psicólogo", "policía", "estudiante", "emprendedor"];
+    return { text: `No reconocí esa profesión todavía. Prueba con una como: ${ex.join(", ")}… o escribe «omitir».` };
+  }
+
   private route(text: string, t: string): LocalReply | null {
+    if (this.onboard !== "done") {
+      const r = this.onboard_(text, t);
+      if (r) return r;
+    }
     // Respuesta a una autorización pendiente (solo la más reciente)
     const pend = [...this.jobs.outbox()].reverse().find((o) => o.kind === "approval" && o.confirmationId && this.jobs.list().some((j) => j.awaiting === o.confirmationId));
     if (pend && pend.confirmationId) {
@@ -157,6 +232,9 @@ export class HockiBrain {
         return { text: "Entendido, no hice nada." };
       }
     }
+
+    const sys = this.systemRoute(t);
+    if (sys) return sys;
 
     if (/\b(comandos|que sabes hacer|que puedo pedirte|como uso la memoria)\b/.test(t)) return { text: HELP_TEXT };
 
@@ -263,6 +341,121 @@ export class HockiBrain {
     return null;
   }
 
+
+  // ── Permisos, apps y herramientas ──────────────────────────────────────────
+
+  private static LEVELS: Array<[RegExp, Level, string]> = [
+    [/\bapagado\b/, "off", "Quedo apagado: no hago nada sobre tus aplicaciones."],
+    [/\bobservar\b/, "observe", "Solo observo."],
+    [/\bsugerir\b/, "suggest", "Solo te sugiero; tú haces."],
+    [/\bconfirmar\b/, "confirm", "Modo confirmar: hago lo que me pidas y siempre te pregunto antes de algo sensible."],
+    [/\breposo\b/, "rest", "Modo reposo: solo hago lo que dejaste autorizado de antemano cuando el equipo está en reposo."],
+  ];
+
+  private matchTool(text: string): Tool | null {
+    const t = normalize(text);
+    let best: Tool | null = null, len = 0;
+    for (const tool of TOOLS) {
+      for (const n of [tool.name, tool.id, ...(tool.aliases ?? [])].map(normalize)) {
+        const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (n.length > len && new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(t)) { best = tool; len = n.length; }
+      }
+    }
+    return best;
+  }
+
+  private systemRoute(t: string): LocalReply | null {
+    const apps = this.d.apps;
+
+    // Nivel de permiso
+    let m = t.match(/\b(nivel|modo)\b(.*)/);
+    if (m && !/\b(pasear|quieto)\b/.test(t)) {
+      for (const [re, level, msg] of HockiBrain.LEVELS) {
+        if (re.test(m[2])) {
+          this.d.engine.grants.level = level;
+          if (level === "confirm" || level === "rest") this.d.engine.grants.kinds.open_app = true;
+          return { text: msg };
+        }
+      }
+    }
+    if (/^(reactivate|reanuda|vuelve a trabajar|continua)$/.test(t)) { this.resumeAll(); return { text: "Listo, estoy de vuelta." }; }
+
+    // Respuesta al "¿me das permiso para abrir X?"
+    if (this.pendingApp && apps) {
+      const app = apps.app(this.pendingApp);
+      if (/^(si|dale|claro|ok|listo|de una|permiso concedido)$/.test(t) && app) {
+        this.pendingApp = null;
+        apps.grantApp(app.id);
+        if (this.d.engine.grants.level === "off") this.d.engine.grants.level = "confirm";
+        this.d.engine.grants.kinds.open_app = true;
+        this.journal.add("approval", `Permiso para abrir ${app.name}`);
+        return this.openApp(app);
+      }
+      if (/^(no|nunca|no gracias|cancela)$/.test(t)) { this.pendingApp = null; return { text: "Entendido, no la abro." }; }
+    }
+    m = t.match(/^(?:quita|retira|revoca)\s+(?:el )?permiso\s+(?:de |para |a )?(.+)/);
+    if (m && apps) {
+      const app = matchApp(m[1], apps.list());
+      if (app) { apps.revokeApp(app.id); return { text: `Listo, ya no puedo abrir ${app.name}.` }; }
+    }
+
+    // Abrir una aplicación
+    m = t.match(/^(?:por favor\s+)?(?:abre|abreme|abrir|inicia|lanza|ejecuta|open)\s+(.+)/);
+    if (m && apps && !/\b(hocki|isla|chat|memoria)\b/.test(m[1])) {
+      const app = matchApp(m[1], apps.list());
+      if (!app) return null;
+      if (!apps.isGranted(app.id)) {
+        this.pendingApp = app.id;
+        return { text: `Para abrir ${app.name} necesito tu permiso (solo para abrirla). ¿Me lo das? Responde «sí» o «no».` };
+      }
+      return this.openApp(app);
+    }
+
+    // Trabajar con una herramienta
+    m = t.match(/^(?:salir de|dejar|deja|termina|terminar|ya no uso|cerrar modo)\s+(.+)/);
+    if (m) {
+      const tool = this.matchTool(m[1]);
+      if (tool && this.tool === tool.id) { this.tool = undefined; return { text: `Salí del modo ${tool.name}. Sigo contigo en general.` }; }
+    }
+    m = t.match(/^modo\s+(.+)/);
+    if (m) {
+      const tool = this.matchTool(m[1]);
+      if (tool) { this.tool = tool.id; return { text: toolHelp(tool) }; }
+    }
+    m = t.match(/(?:ayudame|ayudanos|ayuda|trabajemos|vamos a trabajar|usemos|modo|trabajo|estoy trabajando|que puedes hacer|que sabes hacer)\b.*\b(?:con|en|de)\s+(.+)/);
+    if (m) {
+      const tool = this.matchTool(m[1]);
+      if (tool) {
+        this.tool = tool.id;
+        const hint = apps?.app(tool.id) && !apps.isGranted(tool.id) ? `\nSi quieres que la abra, dime «abre ${tool.name}».` : "";
+        return { text: toolHelp(tool) + hint };
+      }
+    }
+    return null;
+  }
+
+  private openApp(app: AppDef): LocalReply {
+    const apps = this.d.apps;
+    if (!apps) return { text: "Abrir aplicaciones no está disponible aquí." };
+    const res = apps.open(app.id, "user", { resting: this.d.resting?.() ?? false });
+    const d = res.decision;
+    if (d.type === "deny") {
+      if (/detenido/.test(d.reason)) return { text: "Estoy detenido. Escribe «reactívate» o dime «abre Hocki» para volver." };
+      return { text: `No puedo abrir ${app.name}: ${d.reason}. Escribe «modo confirmar» para darme ese permiso.` };
+    }
+    if (d.type === "suggest_only") return { text: `Estoy en modo sugerir: abre ${app.name} tú. Escribe «modo confirmar» si quieres que lo haga yo.` };
+    if (d.type === "ask") {
+      if (d.needsBiometric) return { text: `${app.name} es sensible: ábrela tú. Yo no la toco sin tu verificación.` };
+      // Lo que la persona acaba de pedir es la confirmación.
+      const cid = this.d.engine.openConfirmation(res.request!, false);
+      this.d.engine.approve(cid);
+    }
+    this.d.launch?.(app);
+    this.journal.add("approval", `Abrí ${app.name}`);
+    const help = toolById(app.id) ? ` Si quieres ayuda con ella, dime «ayúdame con ${app.name}».` : "";
+    return { text: `Abriendo ${app.name}…${help}` };
+  }
+
   // ── Para el asistente de IA ────────────────────────────────────────────────
 
   /**
@@ -272,10 +465,13 @@ export class HockiBrain {
   wrap(query: string): string {
     const first = this.turns === 0;
     const facts = this.memory.enabled ? this.memory.relevantFacts(query) : [];
+    const tool = this.tool ? toolById(this.tool) : undefined;
     if (first) {
-      return `${buildSystemPrompt({ profession: this.professionProfile, name: this.name, facts, now: new Date(this.now()) })}\n\nPregunta de la persona:\n${query}`;
+      const sys = buildSystemPrompt({ profession: this.professionProfile, name: this.name, facts, now: new Date(this.now()) });
+      return `${sys}${tool ? `\n\n${toolPrompt(tool)}` : ""}\n\nPregunta de la persona:\n${query}`;
     }
-    return facts.length ? `(Recuerda: ${facts.join("; ")})\n\n${query}` : query;
+    const ctx = [tool ? `Herramienta activa: ${tool.name} (${tool.scripting}). Responde con scripts completos y dónde ejecutarlos.` : "", facts.length ? `Recuerda: ${facts.join("; ")}` : ""].filter(Boolean).join(" ");
+    return ctx ? `(${ctx})\n\n${query}` : query;
   }
 
   /** Después de cada turno con el asistente: lo guarda (si hay memoria) y lo anota en el registro. */

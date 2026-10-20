@@ -14,9 +14,11 @@ import { professionById } from "../src/hocki/professions.ts";
 
 const T0 = new Date(2026, 9, 14, 9, 0, 0).getTime(); // miércoles
 const clock = (start = T0) => { const c = { t: start, now: () => c.t, adv: (ms) => { c.t += ms; } }; return c; };
-const mkBrain = (c = clock(), kv = new MemoryKV(), level = "confirm") => {
+const mkBrain = (c = clock(), kv = new MemoryKV(), level = "confirm", opts = {}) => {
   const engine = new PermissionEngine({ level, kinds: { send_message: true, read_screen: true, open_app: true, change_settings: true, delete: true, payment: true } });
-  return { c, kv, engine, brain: HockiBrain.load({ engine, kv, now: c.now }) };
+  const brain = HockiBrain.load({ engine, kv, now: c.now });
+  if (!opts.onboarding) brain.onboard = "done";
+  return { c, kv, engine, brain };
 };
 
 // ── Memoria ──────────────────────────────────────────────────────────────────
@@ -323,4 +325,161 @@ test("por escrito también: pasear, quieto, isla y escucha", () => {
   assert.equal(brain.handle("vuelve a la isla").action, "home");
   assert.equal(brain.handle("escúchame siempre").action, "listen_on");
   assert.equal(brain.handle("deja de escuchar").action, "listen_off");
+});
+
+// ── Primera vez: nombre y oficio ─────────────────────────────────────────────
+
+test("la primera vez Hocki pregunta nombre y oficio y se adapta", () => {
+  const { brain } = mkBrain(clock(), new MemoryKV(), "confirm", { onboarding: true });
+  assert.ok(brain.onboardingPrompt().includes("cómo te llamas"));
+  assert.ok(brain.handle("Camila").text.includes("Mucho gusto, Camila"));
+  assert.ok(brain.onboardingPrompt().includes("A qué te dedicas"));
+  const r = brain.handle("soy docente");
+  assert.equal(brain.profession, "docente");
+  assert.ok(r.text.includes("activa mis rutinas"));
+  assert.equal(brain.onboard, "done");
+  assert.equal(brain.onboardingPrompt(), null);
+  assert.equal(brain.name, "Camila");
+});
+
+test("la bienvenida acepta oficio sin 'soy', se puede omitir y no estorba preguntas", () => {
+  const a = mkBrain(clock(), new MemoryKV(), "confirm", { onboarding: true }).brain;
+  a.handle("David");
+  a.handle("abogado");
+  assert.equal(a.profession, "abogado-litigante");
+
+  const b = mkBrain(clock(), new MemoryKV(), "confirm", { onboarding: true }).brain;
+  assert.ok(b.handle("omitir").text.includes("Sin problema"));
+  assert.equal(b.onboardingPrompt(), null);
+
+  const c2 = mkBrain(clock(), new MemoryKV(), "confirm", { onboarding: true }).brain;
+  assert.equal(c2.handle("¿Qué es una tutela?"), null); // pasa al asistente de IA
+  assert.equal(c2.onboard, "done");
+
+  const d = mkBrain(clock(), new MemoryKV(), "confirm", { onboarding: true }).brain;
+  d.handle("Ana");
+  assert.ok(d.handle("astronauta").text.includes("No reconocí"));
+  assert.ok(d.handle("astronauta").text.includes("en general"));
+  assert.equal(d.onboard, "done");
+});
+
+test("quien ya tenía datos guardados no repite la bienvenida", () => {
+  const kv = new MemoryKV();
+  const first = mkBrain(clock(), kv, "confirm", { onboarding: true }).brain;
+  first.handle("Luis"); first.handle("soy contador");
+  const again = HockiBrain.load({ engine: new PermissionEngine(), kv });
+  assert.equal(again.onboardingPrompt(), null);
+  assert.equal(again.profession, "contador");
+});
+
+// ── Apps, herramientas de diseño/Office y permisos por chat ──────────────────
+
+import { AppAutomation, APP_CATALOG, matchApp } from "../src/hocki/apps.ts";
+import { TOOLS, toolById, toolPrompt } from "../src/hocki/tools.ts";
+import { voiceErrorText } from "../src/hocki/voice-service.ts";
+
+const mkApps = (c = clock(), kv = new MemoryKV()) => {
+  const engine = new PermissionEngine();
+  const apps = new AppAutomation(engine, "windows");
+  const launched = [];
+  const brain = HockiBrain.load({ engine, kv, now: c.now, apps, launch: (a) => launched.push(a.id) });
+  brain.onboard = "done";
+  return { c, kv, engine, apps, launched, brain };
+};
+
+test("el catálogo trae Adobe, 3D, CAD, audio/video y Office, con nombre para buscar el programa", () => {
+  const need = ["photoshop", "illustrator", "premiere", "aftereffects", "audition", "blender", "maya", "3dsmax", "sketchup",
+    "autocad", "revit", "davinci", "audacity", "word", "excel", "powerpoint", "outlook", "figma"];
+  for (const id of need) {
+    const a = APP_CATALOG.find((x) => x.id === id);
+    assert.ok(a, id);
+    assert.ok(a.find && a.find.length, `${id} necesita find`);
+  }
+  assert.equal(matchApp("abre el power point", APP_CATALOG).id, "powerpoint");
+  assert.equal(matchApp("ábreme After Effects", APP_CATALOG).id, "aftereffects");
+  assert.equal(matchApp("abre la calculadora", APP_CATALOG).id, "calculadora");
+  assert.equal(matchApp("hola qué tal", APP_CATALOG), null);
+});
+
+test("cada herramienta del asistente tiene su ayuda y la mayoría están en el catálogo", () => {
+  for (const t of TOOLS) {
+    assert.ok(t.scripting && t.where && t.ideas.length, t.id);
+    assert.ok(toolPrompt(t).includes(t.name));
+  }
+  for (const id of ["blender", "maya", "sketchup", "autocad", "photoshop", "excel", "word", "powerpoint"]) assert.ok(toolById(id), id);
+});
+
+test("abrir una app: pide permiso la primera vez, luego la abre sin repetir", () => {
+  const { brain, launched, engine } = mkApps();
+  assert.ok(brain.handle("abre photoshop").text.includes("necesito tu permiso"));
+  assert.equal(launched.length, 0);
+  assert.ok(brain.handle("sí").text.includes("Abriendo Photoshop"));
+  assert.deepEqual(launched, ["photoshop"]);
+  assert.equal(engine.grants.level, "confirm");
+  assert.ok(brain.handle("abre photoshop").text.includes("Abriendo"));
+  assert.equal(launched.length, 2);
+});
+
+test("decir que no, o quitar el permiso, impide abrirla", () => {
+  const { brain, launched } = mkApps();
+  brain.handle("abre blender"); brain.handle("no");
+  assert.equal(launched.length, 0);
+  brain.handle("abre blender"); brain.handle("sí");
+  assert.equal(launched.length, 1);
+  assert.ok(brain.handle("quita el permiso de blender").text.includes("ya no puedo"));
+  assert.ok(brain.handle("abre blender").text.includes("necesito tu permiso"));
+  assert.equal(launched.length, 1);
+});
+
+test("'Hocki fuera' bloquea abrir apps hasta reactivarlo; el modo sugerir tampoco abre", () => {
+  const { brain, launched } = mkApps();
+  brain.handle("abre excel"); brain.handle("sí");
+  brain.stopAll();
+  assert.ok(brain.handle("abre excel").text.includes("detenido"));
+  brain.handle("reactívate");
+  brain.handle("modo sugerir");
+  assert.ok(brain.handle("abre excel").text.includes("sugerir"));
+  assert.equal(launched.length, 1);
+  brain.handle("modo confirmar");
+  assert.ok(brain.handle("abre excel").text.includes("Abriendo"));
+});
+
+test("no abre apps que no conoce ni confunde 'abre Hocki'", () => {
+  const { brain, launched } = mkApps();
+  assert.equal(brain.handle("abre la puerta"), null);
+  assert.equal(brain.handle("abre hocki"), null);
+  assert.equal(launched.length, 0);
+});
+
+test("modo herramienta: ayuda, contexto para la IA y salir", () => {
+  const { brain } = mkApps();
+  const r = brain.handle("ayúdame con Blender");
+  assert.ok(r.text.includes("Python (bpy)") && r.text.includes("salir de Blender"));
+  assert.equal(brain.tool, "blender");
+  assert.ok(brain.wrap("hazme un cubo").includes("Blender"));
+  brain.afterTurn("a", "b");
+  assert.ok(brain.wrap("ahora un cilindro").includes("Herramienta activa: Blender"));
+  assert.ok(brain.handle("salir de blender").text.includes("Salí del modo"));
+  assert.equal(brain.tool, undefined);
+  assert.equal(brain.handle("modo excel").text.includes("Excel"), true);
+  assert.equal(brain.tool, "excel");
+});
+
+test("permisos, apps autorizadas y herramienta se recuerdan al reiniciar", () => {
+  const a = mkApps();
+  a.brain.handle("abre autocad"); a.brain.handle("sí");
+  a.brain.handle("ayúdame con AutoCAD");
+  a.brain.save();
+  const b = mkApps(a.c, a.kv);
+  assert.equal(b.engine.grants.level, "confirm");
+  assert.equal(b.apps.isGranted("autocad"), true);
+  assert.equal(b.brain.tool, "autocad");
+  assert.ok(b.brain.handle("abre autocad").text.includes("Abriendo"));
+});
+
+test("los errores de voz se explican en español", () => {
+  for (const r of ["unsupported", "not-allowed", "audio-capture", "network", "language-not-supported", "otro"]) {
+    assert.ok(voiceErrorText(r).length > 20, r);
+  }
+  assert.ok(voiceErrorText("unsupported").includes("chat"));
 });

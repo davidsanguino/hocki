@@ -10,6 +10,8 @@ import { calls, emit, internals, sent } from "./tauri.mjs";
 installFakeDom();
 const { buildPrompt } = await import("../src/views/chat.ts");
 const { DEFAULT_SETTINGS, State } = await import("../src/core/state.ts");
+const { brain } = await import("../src/hocki/runtime.ts");
+brain.onboard = "done"; // estas pruebas hablan con el asistente, no con la bienvenida
 
 /** What the mocked Rust side answers, by command. */
 let answers;

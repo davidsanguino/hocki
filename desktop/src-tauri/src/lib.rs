@@ -205,6 +205,22 @@ fn open_url(url: String) {
     platform::open_url(&url);
 }
 
+/// Opens an installed app by words of its name ("photoshop", "after effects"). The person
+/// has already authorised it in the chat; here only plain names are accepted and nothing is
+/// run through a shell.
+#[tauri::command]
+fn launch_app(keywords: Vec<String>) -> bool {
+    let clean = keywords.len() <= 4
+        && keywords.iter().all(|k| {
+            (2..=40).contains(&k.chars().count())
+                && k.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '.' || c == '-' || c == '+')
+        });
+    if !clean {
+        return false;
+    }
+    platform::launch_shortcut(&keywords)
+}
+
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
 /// and falls back to the file manager otherwise.
 #[tauri::command]
@@ -689,6 +705,7 @@ pub fn run() {
             reposition,
             list_monitors,
             open_url,
+            launch_app,
             open_in_vscode,
             open_session,
             open_claude_desktop,

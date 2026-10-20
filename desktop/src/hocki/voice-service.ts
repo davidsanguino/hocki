@@ -43,7 +43,26 @@ export interface VoiceServiceOptions {
   setTimer?: (fn: () => void, ms: number) => unknown;
 }
 
-const FATAL = new Set(["not-allowed", "service-not-allowed", "audio-capture"]);
+const FATAL = new Set(["not-allowed", "service-not-allowed", "audio-capture", "network", "language-not-supported"]);
+
+/** Qué le decimos a la persona cuando la voz no arranca. */
+export function voiceErrorText(reason: string): string {
+  switch (reason) {
+    case "unsupported":
+      return "En este equipo el reconocimiento de voz no está disponible dentro de la app. Puedes escribirme en el chat: entiendo exactamente lo mismo.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "No tengo permiso para usar el micrófono. Actívalo en Windows: Configuración → Privacidad → Micrófono, y permite las aplicaciones de escritorio.";
+    case "audio-capture":
+      return "No encuentro un micrófono. Revisa que esté conectado y elegido en Windows.";
+    case "network":
+      return "El servicio de reconocimiento de voz no responde (necesita internet). Mientras tanto escríbeme en el chat.";
+    case "language-not-supported":
+      return "Mi reconocimiento de voz no tiene español en este equipo. Escríbeme en el chat.";
+    default:
+      return "No pude activar la voz. Escríbeme en el chat mientras lo reviso.";
+  }
+}
 
 export class VoiceService {
   private o: VoiceServiceOptions;

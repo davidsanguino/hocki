@@ -396,6 +396,8 @@ export const Bridge = {
   /** To the island, then hidden. `forget`: he lives in the island again. */
   desktopFlyHome: (forget: boolean) => call<boolean>("desktop_hocki_fly_home", { forget }),
   /** Asleep, the cursor poll stops. */
+  /** Opens an installed app by words of its Start-menu shortcut name (Windows). */
+  launchApp: (keywords: string[]) => call<boolean>("launch_app", { keywords }),
   desktopSetAsleep: (asleep: boolean) => call<void>("desktop_hocki_set_asleep", { asleep }),
   /** Windows: where the cursor is, the walkable area and the rhythm of input, to roam. */
   desktopRoamInput: () => call<{
