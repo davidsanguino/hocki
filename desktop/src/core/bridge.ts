@@ -398,6 +398,9 @@ export const Bridge = {
   /** Asleep, the cursor poll stops. */
   /** Opens an installed app by words of its Start-menu shortcut name (Windows). */
   launchApp: (keywords: string[]) => call<boolean>("launch_app", { keywords }),
+  /** Windows' own speech recognizer (no internet); lines arrive as the "voice-native" event. */
+  voiceNativeStart: () => call<boolean>("voice_native_start"),
+  voiceNativeStop: () => call<void>("voice_native_stop"),
   desktopSetAsleep: (asleep: boolean) => call<void>("desktop_hocki_set_asleep", { asleep }),
   /** Windows: where the cursor is, the walkable area and the rhythm of input, to roam. */
   desktopRoamInput: () => call<{

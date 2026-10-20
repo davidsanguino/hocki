@@ -31,6 +31,7 @@ mod shortcuts;
 mod sounds;
 mod spotify;
 mod tray;
+mod voice_native;
 #[cfg(windows)]
 mod webview_drop;
 
@@ -706,6 +707,8 @@ pub fn run() {
             list_monitors,
             open_url,
             launch_app,
+            voice_native::voice_native_start,
+            voice_native::voice_native_stop,
             open_in_vscode,
             open_session,
             open_claude_desktop,

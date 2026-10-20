@@ -82,6 +82,7 @@ export const HELP_TEXT = [
   "• \"Qué tengo programado\", \"cancela todo\", \"qué pasó mientras no estaba\", \"registro de hoy\".",
   "• \"Sal a pasear\" / \"quédate quieto\" / \"vuelve a la isla\": me muevo por tu pantalla sin estorbar.",
   "• \"Escúchame siempre\": activo la voz. Dime \"Hocki, abre\", \"Hocki, cierra\" o \"Hocki fuera\".",
+  "• \"Abre Photoshop\" (Word, Excel, Blender, AutoCAD…): abro tus programas con tu permiso. \"Ayúdame con Blender\": te escribo scripts, macros y guías.",
 ].join("\n");
 
 /** Cosas que Hocki hace en pantalla; las ejecuta la isla al recibirlas. */
@@ -244,7 +245,7 @@ export class HockiBrain {
     if (/\b(quedate quieto|no pasees|deja de pasear|no camines)\b/.test(t)) return { text: "Me quedo quietecito aquí.", action: "still" };
     if (/\b(vuelve a la isla|regresa a la isla|a la isla)\b/.test(t)) return { text: "Vuelvo a la isla.", action: "home" };
     if (/\b(escuchame siempre|escucha siempre|activa (el )?micro(fono)?|activa la voz|activa tu oido)\b/.test(t))
-      return { text: "Listo, te escucho. Dime «Hocki» antes de cada orden o pregunta. Ojo: el reconocimiento de voz del sistema puede enviar el audio a un servicio en internet.", action: "listen_on" };
+      return { text: "Listo, te escucho. Dime «Hocki» antes de cada orden o pregunta. En Windows uso el reconocimiento de voz del propio sistema, sin internet; necesita el idioma español con voz instalado.", action: "listen_on" };
     if (/\b(deja de escuchar|desactiva (el )?micro(fono)?|apaga la voz|no me escuches)\b/.test(t))
       return { text: "Dejé de escuchar.", action: "listen_off" };
 

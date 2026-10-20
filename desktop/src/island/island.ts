@@ -4,7 +4,7 @@
 import { brain, permissions } from "../hocki/runtime";
 import { HELP_TEXT, type HockiAction } from "../hocki/brain";
 import { Tracked, Spring, clamp } from "../core/anim";
-import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
+import { Bridge, IS_TAURI, onDragDrop, onEvent } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
@@ -23,6 +23,7 @@ import { professionById } from "../hocki/professions";
 import { browserKV } from "../hocki/storage";
 import { parseVoice, stripName } from "../hocki/voice-commands";
 import { VoiceService, browserRecognizerFactory, voiceErrorText } from "../hocki/voice-service";
+import { nativeRecognizerFactory } from "../hocki/voice-native";
 import { SeasonCache, parseOutfit } from "../hocki/wardrobe";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
@@ -82,7 +83,14 @@ export class Island {
   private greeting = new Greeting();
   private speaker = new Speaker(browserBackend() ?? { speak() {}, cancel() {} });
   private voice = new VoiceService({
-    factory: browserRecognizerFactory(),
+    // En Windows se usa el reconocedor del propio sistema (sin internet); en otros, el del navegador.
+    factory: IS_TAURI && navigator.userAgent.includes("Windows")
+      ? nativeRecognizerFactory({
+          start: async () => (await Bridge.voiceNativeStart()) ?? false,
+          stop: async () => { await Bridge.voiceNativeStop(); },
+          listen: async (h) => await onEvent<string>("voice-native", h),
+        })
+      : browserRecognizerFactory(),
     onHeard: (text) => this.onVoiceHeard(text),
     onState: (on, error) => {
       State.voiceOn = on;

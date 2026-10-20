@@ -34,7 +34,7 @@ export function normalize(text: string): string {
 }
 
 /** Cómo suelen transcribir los motores de voz el nombre. */
-const NAME_ALIASES = new Set(["hocki", "hoki", "jocki", "joki", "hockey", "hoqui", "jockey", "hoky", "ocki", "oki"]);
+const NAME_ALIASES = new Set(["hocki", "hoki", "jocki", "joki", "hockey", "hoqui", "jockey", "hoky", "ocki", "oki", "joqui", "yoqui", "yoki", "jogui", "hoqui", "jokey", "jocky", "hocky", "yocki", "joky"]);
 
 function distance(a: string, b: string): number {
   const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);

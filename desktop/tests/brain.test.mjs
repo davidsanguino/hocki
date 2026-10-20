@@ -483,3 +483,39 @@ test("los errores de voz se explican en español", () => {
   }
   assert.ok(voiceErrorText("unsupported").includes("chat"));
 });
+
+// ── Reconocedor de voz de Windows ────────────────────────────────────────────
+
+import { parseNativeLine, nativeRecognizerFactory } from "../src/hocki/voice-native.ts";
+import { VoiceService } from "../src/hocki/voice-service.ts";
+
+test("las líneas del reconocedor de Windows se entienden", () => {
+  assert.deepEqual(parseNativeLine("HEARD:hocki fuera"), { kind: "heard", text: "hocki fuera" });
+  assert.deepEqual(parseNativeLine("ERR:no-spanish"), { kind: "error", reason: "no-spanish" });
+  assert.deepEqual(parseNativeLine("READY"), { kind: "ready" });
+  assert.equal(parseNativeLine("HEARD:  "), null);
+  assert.equal(parseNativeLine("ruido"), null);
+});
+
+test("la voz nativa entrega frases y avisa de errores en español", async () => {
+  let handler = null; const calls = [];
+  const io = {
+    start: async () => { calls.push("start"); return true; },
+    stop: async () => { calls.push("stop"); },
+    listen: async (h) => { handler = h; return () => { handler = null; }; },
+  };
+  const heard = []; const states = [];
+  const v = new VoiceService({ factory: nativeRecognizerFactory(io), onHeard: (t) => heard.push(t), onState: (on, e) => states.push([on, e]) });
+  assert.equal(v.start(), true);
+  await new Promise((r) => setTimeout(r, 5));
+  handler("READY"); handler("HEARD:abre hocki");
+  assert.deepEqual(heard, ["abre hocki"]);
+  handler("ERR:no-spanish");
+  assert.deepEqual(states.at(-1), [false, "no-spanish"]);
+  assert.equal(v.on, false);
+  assert.ok(voiceErrorText("no-spanish").includes("español"));
+});
+
+test("el nombre de Hocki se reconoce aunque el motor lo escriba distinto", () => {
+  for (const n of ["Yoqui", "Joqui", "Jocki", "Hoqui"]) assert.equal(parseVoice(`${n} fuera`).intent, "stop", n);
+});
