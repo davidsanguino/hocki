@@ -890,6 +890,62 @@ pub fn desktop_hocki_set_asleep(app: AppHandle, desktop: State<Arc<Desktop>>, as
     }
 }
 
+/// What the page needs to decide where Hocki walks: the cursor, where he is,
+/// the work area of his display, and whether the person is clicking or typing.
+/// Physical pixels. Only the rhythm of input is seen, never which key.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoamInput {
+    cursor: (f64, f64),
+    pos: (f64, f64),
+    /// x, y, width, height of the usable area (no taskbar).
+    work: [f64; 4],
+    scale: f64,
+    pressed: bool,
+    typing: bool,
+}
+
+#[tauri::command]
+pub fn desktop_hocki_roam_input(app: AppHandle, desktop: State<Arc<Desktop>>) -> Option<RoamInput> {
+    if desktop.mode != DesktopMode::Poll {
+        return None;
+    }
+    let (pos, free) = {
+        let i = desktop.inner.lock().unwrap();
+        (i.pos, i.shown && i.landed && i.carry.is_none())
+    };
+    if !free {
+        return None;
+    }
+    let cursor = platform::cursor_physical()?;
+    let all = displays(&app, &desktop);
+    let here = logic::display_near(pos, &all)?;
+    Some(RoamInput {
+        cursor,
+        pos,
+        work: [here.work.x, here.work.y, here.work.w, here.work.h],
+        scale: here.scale,
+        pressed: platform::left_button_down(),
+        typing: platform::any_key_down(),
+    })
+}
+
+/// Moves him to `x`, `y` (top-left, physical pixels) while he walks. Only when
+/// he is sitting on the desktop: never while he is flying or being carried.
+#[tauri::command]
+pub fn desktop_hocki_roam_to(app: AppHandle, desktop: State<Arc<Desktop>>, x: f64, y: f64) {
+    if desktop.mode != DesktopMode::Poll {
+        return;
+    }
+    {
+        let i = desktop.inner.lock().unwrap();
+        if !(i.shown && i.landed) || i.carry.is_some() {
+            return;
+        }
+    }
+    place(&app, &desktop, (x, y));
+}
+
 #[cfg(test)]
 mod tests {
     use super::logic::*;

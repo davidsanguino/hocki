@@ -2,6 +2,7 @@
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
 import { brain, permissions } from "../hocki/runtime";
+import { HELP_TEXT, type HockiAction } from "../hocki/brain";
 import { Tracked, Spring, clamp } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
@@ -14,16 +15,18 @@ import {
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import { SPOTIFY_ID, islandDances } from "../core/spotify";
-import { BotEngine, hexToRGB } from "../hocki/engine";
+import { BotEngine } from "../hocki/engine";
 import { Greeting } from "../hocki/greeting";
 import { createMiniBot, pruneMiniBots, setMiniCursor, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
-import { Speaker, browserBackend, reply } from "../hocki/dialogue";
-import { parseVoice } from "../hocki/voice-commands";
+import { Speaker, browserBackend, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
+import { professionById } from "../hocki/professions";
+import { browserKV } from "../hocki/storage";
+import { parseVoice, stripName } from "../hocki/voice-commands";
 import { VoiceService, browserRecognizerFactory } from "../hocki/voice-service";
 import { SeasonCache, parseOutfit } from "../hocki/wardrobe";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
-import { closePlanCard, openPlanColor, planCardOpen } from "../views/usage";
+import { closePlanCard } from "../views/usage";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
@@ -87,6 +90,8 @@ export class Island {
       State.notify();
     },
   });
+  private kv = browserKV();
+  private chatterAt = Date.now();
   private greetingShown = false;
   private seasons = new SeasonCache();
 
@@ -140,6 +145,15 @@ export class Island {
     this.engine.onDizzy = () => this.handleDizzy();
     // Segundo plano: cada segundo revisa si toca algún recordatorio o rutina.
     setInterval(() => this.backgroundTick(), 1000);
+    window.addEventListener("hocki-action", (e) => this.doAction((e as CustomEvent<HockiAction>).detail));
+    // Si la persona pidió que lo escuche siempre, vuelve a encender el micrófono al arrancar.
+    if (this.kv.get("hocki.listen") === "on") window.setTimeout(() => { if (!this.voice.on) this.toggleVoice(); }, 3000);
+    // Primera vez: Hocki se presenta y explica qué puede hacer.
+    if (!brain.journal.list({ kind: "system" }).some((e) => e.title === "Bienvenida")) {
+      brain.journal.add("system", "Bienvenida");
+      brain.save();
+      State.chatHistory.push({ id: Date.now(), role: "assistant", content: `¡Hola, soy Hocki!\n${HELP_TEXT}` });
+    }
     this.greeting.onComplete = () => {
       this.fsm.greetComplete();
       this.onGreetingDone?.();
@@ -425,8 +439,19 @@ export class Island {
     State.notify();
   }
 
+  /** Si la voz está activa, de vez en cuando Hocki comenta algo de tu oficio (cada ~25 min, sin interrumpir). */
+  private chatter() {
+    const now = Date.now();
+    if (!this.voice.on || !this.speaker.settings.enabled || now - this.chatterAt < 25 * 60_000) return;
+    if (State.mode === "expanded" || State.pendingApproval || State.stateOverride === "thinking") return;
+    this.chatterAt = now;
+    const p = professionById(brain.profession);
+    this.say(Math.random() < 0.5 ? (tipFor(p) ?? phraseFor("idleLong", p)) : phraseFor("idleLong", p));
+  }
+
   /** Entrega lo que las tareas en segundo plano dejaron: aparece en el chat, suena y Hocki avisa. */
   private backgroundTick() {
+    this.chatter();
     let fresh;
     try { fresh = brain.tick(); } catch (e) { console.warn("Hocki: fallo en tareas de fondo", e); return; }
     if (!fresh.length) return;
@@ -458,26 +483,121 @@ export class Island {
   private onVoiceHeard(text: string) {
     const cmd = parseVoice(text);
     if (!cmd.addressed && cmd.intent !== "stop") return;
-    const r = reply(text, "general");
-    if (r.action === "ask_ai") return; // aún no está conectado a un asistente de IA
-    this.speaker.say(r.text, { busy: false });
+    const spoken = stripName(text);
+    // 1) Lo que Hocki resuelve solo: recordar, programar, listar, cambiar de oficio…
+    const local = cmd.intent === "unknown" && spoken ? brain.handle(spoken) : null;
+    if (local) {
+      this.say(local.text);
+      this.pushChat(spoken, local.text);
+      if (local.action) this.doAction(local.action);
+      return;
+    }
+    // 2) Órdenes de voz y charla básica.
+    const r = reply(text, brain.profession);
+    if (r.action === "ask_ai") {
+      if (spoken) void this.askAI(spoken);
+      return;
+    }
+    if (r.action === "summary") {
+      const sum = brain.summary();
+      this.say(speakable(sum));
+      this.pushChat(spoken || "resumen del día", sum);
+      return;
+    }
+    this.say(r.text);
     switch (r.action) {
-      case "show":
-        if (permissions.isKilled) brain.resumeAll(); // la persona lo llamó de nuevo
-        // "¿Dónde estás, Hocki?" → aparece la isla y saluda.
-        this.alert("overview");
-        this.engine.greet();
-        break;
       case "stop":
-        brain.stopAll(); // pausa también las tareas en segundo plano
-        this.collapse();
-        this.voice.stop();
+        this.doAction("stop");
+        break;
+      case "show":
+      case "open":
+        this.doAction("open");
         break;
       case "hide":
       case "sleep":
-        this.collapse();
+      case "close":
+        this.doAction("close");
+        break;
+      case "walk":
+      case "still":
+      case "home":
+        this.doAction(r.action);
         break;
       default:
+        break;
+    }
+  }
+
+  private say(text: string) {
+    this.speaker.say(text, { busy: false });
+  }
+
+  private pushChat(user: string, answer: string) {
+    const id = Date.now();
+    if (user) State.chatHistory.push({ id, role: "user", content: user });
+    State.chatHistory.push({ id: id + 1, role: "assistant", content: answer });
+    State.notify();
+  }
+
+  /** Conversa con Anthropic (o el proveedor elegido en Ajustes) y responde en voz alta. */
+  private async askAI(question: string) {
+    State.chatHistory.push({ id: Date.now(), role: "user", content: question });
+    State.stateOverride = "thinking";
+    State.notify();
+    try {
+      const answer = await Bridge.chatSend(brain.wrap(question), null);
+      brain.afterTurn(question, answer.text);
+      State.chatHistory.push({ id: Date.now() + 1, role: "assistant", content: answer.text });
+      this.say(speakable(answer.text));
+      this.engine.triggerEmote("happy");
+    } catch (err) {
+      const why = String(err).replace(/^Error:\s*/, "");
+      const msg = /key|clave|auth|401|credential/i.test(why)
+        ? "Para conversar necesito tu clave de Anthropic. Ábrela en Ajustes, en la parte de chat."
+        : "No pude conectarme con mi asistente. Revisa tu conexión y tu clave en Ajustes.";
+      State.chatHistory.push({ id: Date.now() + 1, role: "assistant", content: msg });
+      this.say(msg);
+    } finally {
+      State.stateOverride = null;
+      State.notify();
+    }
+  }
+
+  /** Lo que Hocki hace en pantalla, venga de la voz o del chat. */
+  doAction(a: HockiAction | "stop") {
+    switch (a) {
+      case "stop":
+        brain.stopAll(); // pausa también las tareas en segundo plano
+        this.kv.set("hocki.roam", "off");
+        this.desktop.walkHome();
+        this.collapse();
+        this.voice.stop();
+        break;
+      case "open":
+        if (permissions.isKilled) brain.resumeAll(); // la persona lo llamó de nuevo
+        this.alert("overview");
+        this.engine.greet();
+        break;
+      case "close":
+        this.collapse();
+        break;
+      case "walk":
+        this.kv.set("hocki.roam", "on");
+        this.desktop.walkOut();
+        break;
+      case "still":
+        this.kv.set("hocki.roam", "off");
+        break;
+      case "home":
+        this.desktop.walkHome();
+        break;
+      case "listen_on":
+        this.kv.set("hocki.listen", "on");
+        if (!this.voice.on) this.toggleVoice();
+        break;
+      case "listen_off":
+        this.kv.set("hocki.listen", "off");
+        if (this.voice.on) this.toggleVoice();
         break;
     }
   }
@@ -1135,13 +1255,9 @@ export class Island {
     const ctx = this.botCanvas.getContext("2d");
     if (!ctx) return;
 
-    const focus = State.focusTask;
-    // While a plan card is open Hocki wears the plan's colour, like its pill.
-    this.engine.bodyColor = planCardOpen()
-      ? hexToRGB(openPlanColor())
-      : focus?.isIntegration
-        ? hexToRGB(focus.color)
-        : null;
+    // Hocki siempre es rosado: ya no toma el color de la tarea o integración en foco
+    // (eso lo volvía blanco o de otro color al arrancar). Solo las miniaturas se tiñen.
+    this.engine.bodyColor = null;
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
     this.engine.lookY = this.lookY();

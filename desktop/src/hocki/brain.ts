@@ -62,7 +62,19 @@ export interface BrainDeps {
   resting?: () => boolean;
 }
 
-export interface LocalReply { text: string }
+export const HELP_TEXT = [
+  "Esto puedo hacer por ti, solo escríbemelo:",
+  "• \"Soy abogada\" (o tu oficio): me adapto a tu trabajo. \"Activa mis rutinas\" programa recordatorios propios de tu oficio.",
+  "• \"Activa tu memoria\", \"recuerda que…\", \"qué recuerdas\", \"olvida todo\".",
+  "• \"Recuérdame llamar a mamá en 10 minutos\" o \"…mañana a las 8\" o \"cada 30 minutos\".",
+  "• \"Qué tengo programado\", \"cancela todo\", \"qué pasó mientras no estaba\", \"registro de hoy\".",
+  "• \"Sal a pasear\" / \"quédate quieto\" / \"vuelve a la isla\": me muevo por tu pantalla sin estorbar.",
+  "• \"Escúchame siempre\": activo la voz. Dime \"Hocki, abre\", \"Hocki, cierra\" o \"Hocki fuera\".",
+].join("\n");
+
+/** Cosas que Hocki hace en pantalla; las ejecuta la isla al recibirlas. */
+export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off";
+export interface LocalReply { text: string; action?: HockiAction }
 
 const list = (items: string[]) => items.map((x) => `• ${x}`).join("\n");
 const fmtWhen = (t: number | null) => (t == null ? "—" : new Date(t).toLocaleString("es-CO", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }));
@@ -145,6 +157,18 @@ export class HockiBrain {
         return { text: "Entendido, no hice nada." };
       }
     }
+
+    if (/\b(comandos|que sabes hacer|que puedo pedirte|como uso la memoria)\b/.test(t)) return { text: HELP_TEXT };
+
+    // Cuerpo y voz de Hocki
+    if (/\b(sal a pasear|ve a pasear|pasea|camina libre|ven al escritorio|sal al escritorio)\b/.test(t))
+      return { text: "¡Voy a pasear! Me aparto cuando estés haciendo clic o escribiendo.", action: "walk" };
+    if (/\b(quedate quieto|no pasees|deja de pasear|no camines)\b/.test(t)) return { text: "Me quedo quietecito aquí.", action: "still" };
+    if (/\b(vuelve a la isla|regresa a la isla|a la isla)\b/.test(t)) return { text: "Vuelvo a la isla.", action: "home" };
+    if (/\b(escuchame siempre|escucha siempre|activa (el )?micro(fono)?|activa la voz|activa tu oido)\b/.test(t))
+      return { text: "Listo, te escucho. Dime «Hocki» antes de cada orden o pregunta. Ojo: el reconocimiento de voz del sistema puede enviar el audio a un servicio en internet.", action: "listen_on" };
+    if (/\b(deja de escuchar|desactiva (el )?micro(fono)?|apaga la voz|no me escuches)\b/.test(t))
+      return { text: "Dejé de escuchar.", action: "listen_off" };
 
     // Oficio y nombre
     let m = t.match(/^(?:soy|ahora soy|trabajo como|me dedico a ser|mi profesion es|mi oficio es)\s+(.+)/);

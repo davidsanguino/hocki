@@ -100,6 +100,18 @@ export class DesktopLink {
     void this.controller.flyOutOrHome();
   }
 
+  /** "Sal a pasear": de la isla al escritorio, si no está ya allí. */
+  walkOut() {
+    if (!this.supported || this.carrying || State.hockiOnDesktop) return;
+    void this.controller.flyOutOrHome();
+  }
+
+  /** "Vuelve a la isla": del escritorio a casa. */
+  walkHome() {
+    if (!this.supported || this.carrying || !State.hockiOnDesktop) return;
+    void this.controller.flyOutOrHome();
+  }
+
   // ── Drag out of the island ──────────────────────────────────────────────────
 
   /** Whether Hocki can be picked up from the island right now. */

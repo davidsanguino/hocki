@@ -202,6 +202,12 @@ function buildPicker(onChange: () => void): Picker {
 
 // ── View ──────────────────────────────────────────────────────────────────────
 
+const HINTS = [
+  "Pregúntame algo… o escribe «comandos»",
+  "Prueba: «recuérdame beber agua en 10 minutos»",
+  "Prueba: «soy abogada» o «activa tu memoria»",
+];
+
 export function buildPrompt(onHeightChange: () => void): ViewHost {
   const chipRow = h("div", { class: "chip-row" });
   const log = h("div", { class: "chat-log" });
@@ -288,6 +294,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       const local = brain.handle(query);
       const reply = local ?? (await Bridge.chatSend(brain.wrap(query), context));
       if (!local) brain.afterTurn(query, reply.text);
+      else if (local.action) window.dispatchEvent(new CustomEvent("hocki-action", { detail: local.action }));
       State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");
@@ -345,7 +352,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       if (State.view !== "prompt" && picker.isOpen) picker.close();
       drawModelButton();
 
-      input.placeholder = t(State.chatHistory.length === 0 ? STRINGS.placeholderFirst : STRINGS.placeholderNext);
+      input.placeholder = State.chatHistory.length === 0
+        ? HINTS[Math.floor(Date.now() / 6000) % HINTS.length]
+        : t(STRINGS.placeholderNext);
       input.disabled = sending;
     },
     focus() {

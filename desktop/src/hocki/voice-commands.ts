@@ -10,6 +10,11 @@ export type VoiceIntent =
   | "hide"       // "Hocki escóndete": se aparta sin detener nada
   | "show"       // "Hocki ven"
   | "where"      // "¿Dónde estás, Hocki?" → aparece la isla y responde "Acá estoy, jefe"
+  | "open"       // "Abre Hocki", "Inicia Hocki": despliega la isla
+  | "close"      // "Cierra Hocki": cierra la isla pero sigue escuchando para volver a abrirse
+  | "walk"       // "Hocki, sal a pasear": se va al escritorio y pasea
+  | "still"      // "Hocki, quédate quieto": deja de pasear
+  | "home"       // "Hocki, vuelve a la isla"
   | "unknown";
 
 export interface VoiceResult {
@@ -46,6 +51,16 @@ export function isName(token: string): boolean {
   return NAME_ALIASES.has(token) || distance(token, "hocki") <= 1;
 }
 
+/** La frase sin el nombre de Hocki ("Hocki, recuérdame…" → "recuérdame…"). */
+export function stripName(raw: string): string {
+  return raw
+    .split(/\s+/)
+    .filter((w) => !isName(normalize(w)) || normalize(w) === "")
+    .join(" ")
+    .replace(/^[\s,.:;¡!¿?-]+/, "")
+    .trim();
+}
+
 const has = (t: string, ...phrases: string[]) => phrases.some((p) => t.includes(p));
 
 /**
@@ -73,6 +88,18 @@ export function parseVoice(raw: string): VoiceResult {
 
   if (has(s, "donde estas", "donde andas", "donde te metiste", "donde te escondes")) return { intent: "where", addressed };
   if (has(s, "resumen del dia", "resumen de hoy", "como estuvo mi dia", "resume mi dia")) return { intent: "summary", addressed };
+  if (has(s, "abre hocki", "abrir hocki", "hocki abre", "hocki abrete", "abrete hocki", "inicia hocki", "iniciar hocki",
+    "hocki inicia", "hocki iniciate", "enciende hocki", "hocki enciende", "arranca hocki", "hocki arranca", "activate hocki", "hocki activate")) {
+    return { intent: "open", addressed };
+  }
+  if (has(s, "cierra hocki", "cerrar hocki", "hocki cierra", "hocki cierrate", "cierrate hocki", "apaga hocki", "hocki apagate", "apagate hocki")) {
+    return { intent: "close", addressed };
+  }
+  if (has(s, "quedate quieto", "hocki quieto", "quieto hocki", "no pasees", "deja de pasear", "dejar de pasear", "para de caminar", "no camines")) {
+    return { intent: "still", addressed };
+  }
+  if (has(s, "a pasear", "hocki pasea", "pasea hocki", "hocki camina", "camina hocki", "al escritorio")) return { intent: "walk", addressed };
+  if (has(s, "a la isla", "vuelve a la isla", "regresa a la isla", "hocki a casa", "vuelve a casa")) return { intent: "home", addressed };
   if (has(s, "a dormir", "reposo", "descansa", "duermete")) return { intent: "sleep", addressed };
   if (has(s, "escondete", "apartate", "quitate", "oculta")) return { intent: "hide", addressed };
   if (has(s, "hocki ven", "ven hocki", "aparece", "sal hocki", "hocki sal")) return { intent: "show", addressed };
@@ -93,4 +120,9 @@ export const VOICE_HELP: Record<Exclude<VoiceIntent, "unknown">, string[]> = {
   hide: ["Hocki escóndete"],
   show: ["Hocki ven"],
   where: ["¿Dónde estás, Hocki?"],
+  open: ["Abre Hocki", "Inicia Hocki"],
+  close: ["Cierra Hocki"],
+  walk: ["Hocki, sal a pasear"],
+  still: ["Hocki, quédate quieto"],
+  home: ["Hocki, vuelve a la isla"],
 };

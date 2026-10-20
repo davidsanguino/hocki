@@ -86,7 +86,7 @@ export function tipFor(p: Profession, rand: () => number = Math.random): string 
 
 // ── Conversación sin conexión ─────────────────────────────────────────────────
 
-export type ReplyAction = "stop" | "summary" | "sleep" | "hide" | "show" | "ask_ai" | null;
+export type ReplyAction = "stop" | "summary" | "sleep" | "hide" | "show" | "open" | "close" | "walk" | "still" | "home" | "ask_ai" | null;
 /** Lo que Hocki responde a "¿Dónde estás, Hocki?". */
 export const WHERE_REPLY = "Acá estoy, jefe";
 
@@ -109,6 +109,11 @@ export function reply(input: string, professionId: string, now: Date = new Date(
     case "hide": return { text: "Me aparto para no estorbar.", action: "hide" };
     case "show": return { text: "¡Aquí estoy!", action: "show" };
     case "where": return { text: WHERE_REPLY, action: "show" };
+    case "open": return { text: "¡Abriendo! Acá estoy.", action: "open" };
+    case "close": return { text: "Cerrando. Dime «abre Hocki» cuando me necesites.", action: "close" };
+    case "walk": return { text: "¡Voy a pasear! Prometo no estorbar.", action: "walk" };
+    case "still": return { text: "Me quedo quietecito aquí.", action: "still" };
+    case "home": return { text: "Vuelvo a la isla.", action: "home" };
     default: break;
   }
   const t = normalize(input);
@@ -133,6 +138,22 @@ export function reply(input: string, professionId: string, now: Date = new Date(
   }
   if (has(t, "adios", "chao", "hasta luego")) return { text: phraseFor("goodbye", p, rand), action: null };
   return { text: "Eso lo puedo consultar con tu asistente de IA si me lo permites.", action: "ask_ai" };
+}
+
+/** Lo que Hocki dice en voz alta de una respuesta larga: sin formato y solo lo esencial. */
+export function speakable(text: string, max = 280): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, " (te dejé el código en el chat) ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/[*_#>]+/g, "")
+    .replace(/^\s*[-•]\s+/gm, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= max) return plain;
+  const cut = plain.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return (end > 60 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "") + "…") + " El resto está en el chat.";
 }
 
 // ── Altavoz ───────────────────────────────────────────────────────────────────

@@ -270,3 +270,57 @@ test("'Hocki fuera' detiene todo y se puede reanudar", () => {
   c.adv(1000);
   assert.ok(brain.tick().length >= 1);
 });
+
+test("'comandos' muestra la ayuda de lo que Hocki puede hacer", () => {
+  const { brain } = mkBrain();
+  const r = brain.handle("comandos");
+  assert.ok(r.text.includes("memoria") && r.text.includes("Recuérdame") && r.text.includes("Hocki fuera"));
+});
+
+// ── Voz: abrir, cerrar, pasear y charla con IA ───────────────────────────────
+
+import { parseVoice, stripName } from "../src/hocki/voice-commands.ts";
+import { reply, speakable } from "../src/hocki/dialogue.ts";
+
+test("comandos de voz para abrir, cerrar, pasear y quedarse quieto", () => {
+  const cases = {
+    "Abre Hocki": "open", "Hocki, inicia": "open", "Inicia Hocki": "open", "oye hocki abre": "open",
+    "Cierra Hocki": "close", "Hocki, ciérrate": "close", "apaga hocki": "close",
+    "Hocki fuera": "stop", "Detener Hocki": "stop",
+    "Hocki, sal a pasear": "walk", "hocki quédate quieto": "still", "Hocki vuelve a la isla": "home",
+    "¿Dónde estás, Hocki?": "where",
+  };
+  for (const [phrase, intent] of Object.entries(cases)) assert.equal(parseVoice(phrase).intent, intent, phrase);
+  assert.equal(parseVoice("abre el navegador").addressed, false); // sin nombrar a Hocki no hace nada
+  assert.equal(parseVoice("abre el navegador").intent, "unknown");
+});
+
+test("las órdenes de voz se convierten en acciones", () => {
+  assert.equal(reply("Abre Hocki", "general").action, "open");
+  assert.equal(reply("Cierra Hocki", "general").action, "close");
+  assert.equal(reply("Hocki fuera", "general").action, "stop");
+  assert.equal(reply("Hocki, sal a pasear", "general").action, "walk");
+  assert.equal(reply("Hocki, explícame la ley 1564", "general").action, "ask_ai");
+});
+
+test("stripName quita el nombre y deja la orden", () => {
+  assert.equal(stripName("Hocki, recuérdame beber agua en 5 minutos"), "recuérdame beber agua en 5 minutos");
+  assert.equal(stripName("oye hocki qué tengo programado"), "oye qué tengo programado");
+});
+
+test("speakable resume respuestas largas y quita el formato", () => {
+  const long = "**Hola.** " + "Esta es una frase larga de ejemplo. ".repeat(30) + "\n```js\nconsole.log(1)\n```";
+  const s = speakable(long);
+  assert.ok(s.length < 340 && !s.includes("**") && !s.includes("```"));
+  assert.ok(s.endsWith("El resto está en el chat."));
+  assert.equal(speakable("Listo."), "Listo.");
+});
+
+test("por escrito también: pasear, quieto, isla y escucha", () => {
+  const { brain } = mkBrain();
+  assert.equal(brain.handle("sal a pasear").action, "walk");
+  assert.equal(brain.handle("quédate quieto").action, "still");
+  assert.equal(brain.handle("vuelve a la isla").action, "home");
+  assert.equal(brain.handle("escúchame siempre").action, "listen_on");
+  assert.equal(brain.handle("deja de escuchar").action, "listen_off");
+});

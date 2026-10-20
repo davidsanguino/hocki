@@ -308,6 +308,10 @@ pub fn left_button_down() -> bool {
     false
 }
 
+pub fn any_key_down() -> bool {
+    false
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 /// The few gtk-layer-shell calls we need, straight from the C library.

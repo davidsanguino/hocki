@@ -11,6 +11,8 @@ import { Bridge, emitToWindow, onEvent, type DesktopMode } from "../core/bridge"
 import type { BotEmoteName } from "../core/layout";
 import { Sound } from "../core/sound";
 import { BotEngine } from "../hocki/engine";
+import { DesktopRoamer } from "../hocki/desktop-roam";
+import { browserKV } from "../hocki/storage";
 import {
   DESKTOP_EVENTS, DOUBLE_CLICK_MS, DRAG_THRESHOLD, PANEL_SIZE, agentActive, gaze, isOverBody,
   layerDragTopLeft, lookOrigin, pointerDistance, shouldSleep, windowDragTopLeft,
@@ -59,6 +61,12 @@ class DesktopHocki {
   private dragOrigin: Point | null = null;
   private dragTopLeft: Point | null = null;
   private moveFrame = false;
+  /** Pasea por la pantalla (Windows). Se apaga con "quédate quieto". */
+  private roamer = new DesktopRoamer({
+    input: async () => await Bridge.desktopRoamInput(),
+    moveTo: async (x, y) => { await Bridge.desktopRoamTo(x, y); },
+  });
+  private kv = browserKV();
   private pokeTimer: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -97,6 +105,17 @@ class DesktopHocki {
       this.canvas.style.opacity = "1";
     });
     await emitToWindow(ISLAND, DESKTOP_EVENTS.ready);
+    window.setInterval(() => void this.roam(), 70);
+  }
+
+  /** Un paso de paseo: solo despierto, en el escritorio y sin que lo estén arrastrando. */
+  private async roam() {
+    if (this.mode !== "poll" || !this.visible || this.asleep || this.dragging || this.press) return;
+    if (this.kv.get("hocki.roam") === "off") { this.canvas.style.opacity = "1"; return; }
+    const r = await this.roamer.tick();
+    if (!r) return;
+    this.canvas.style.opacity = String(r.opacity);
+    if (r.moved && r.mode !== "idle") this.lastAgentActive = performance.now(); // paseando no se duerme
   }
 
   // ── State ───────────────────────────────────────────────────────────────────

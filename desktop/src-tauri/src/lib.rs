@@ -769,6 +769,8 @@ pub fn run() {
             desktop::desktop_hocki_fly_out,
             desktop::desktop_hocki_fly_home,
             desktop::desktop_hocki_set_asleep,
+            desktop::desktop_hocki_roam_input,
+            desktop::desktop_hocki_roam_to,
             sounds::custom_sounds,
             sounds::custom_sound,
             sounds::reveal_sounds_folder,

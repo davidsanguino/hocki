@@ -397,6 +397,13 @@ export const Bridge = {
   desktopFlyHome: (forget: boolean) => call<boolean>("desktop_hocki_fly_home", { forget }),
   /** Asleep, the cursor poll stops. */
   desktopSetAsleep: (asleep: boolean) => call<void>("desktop_hocki_set_asleep", { asleep }),
+  /** Windows: where the cursor is, the walkable area and the rhythm of input, to roam. */
+  desktopRoamInput: () => call<{
+    cursor: [number, number]; pos: [number, number]; work: [number, number, number, number];
+    scale: number; pressed: boolean; typing: boolean;
+  } | null>("desktop_hocki_roam_input"),
+  /** Moves the desktop Hocki while he walks (top-left, physical pixels). */
+  desktopRoamTo: (x: number, y: number) => call<void>("desktop_hocki_roam_to", { x, y }),
 
   // ── Spotify (src-tauri/src/spotify.rs, Linux) ─────────────────────────────
   /** Reads the player again (the card came on screen) and reports it. */

@@ -275,6 +275,12 @@ pub fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }
 
+/// True while any keyboard key is held. Only the rhythm of typing is seen
+/// (so Hocki steps aside), never which key it is: nothing is read or kept.
+pub fn any_key_down() -> bool {
+    (0x08..=0xFEi32).any(|vk| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 })
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
