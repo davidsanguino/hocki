@@ -264,6 +264,8 @@ export class BotEngine {
   private locks = new Set<PropKey>();
   private particles: Particle[] = [];
 
+  /** Ojos fijos: siempre la misma forma, sin parpadeo; solo se mueve la cabeza siguiendo el cursor. */
+  staticEyes = false;
   lookX = 0;
   lookY = 0;
 
@@ -337,6 +339,7 @@ export class BotEngine {
   }
 
   blink() {
+    if (this.staticEyes) return;
     if (this.locks.has("open")) return;
     this.anim("open", [[0.06, 70, Ease.inOut], [1, 130, Ease.out]]);
   }
@@ -1049,6 +1052,7 @@ export class BotEngine {
 
   private drawEyes(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
     let shape: EyeShape = this.eyeOverride ?? this.cfg.eye;
+    if (this.staticEyes && this.morph <= 0.5) shape = "pill";
     // Dancing: happy eyes in the calm states.
     if (this.isDancing && this.dancingLevel > 0.15 && !this.isMini && (this.state === "idle" || this.state === "finished")) {
       shape = "happy";
@@ -1459,4 +1463,11 @@ function rrPoint(ca: number, sa: number, W: number, H: number, cr: number): { x:
     }
   }
   return { x: kx * W, y: ky * H };
+}
+
+/** El Hocki "de verdad" (isla, escritorio, bienvenida): ojos fijos, la cabeza sigue el cursor. */
+export function newHockiEngine(): BotEngine {
+  const e = new BotEngine();
+  e.staticEyes = true;
+  return e;
 }

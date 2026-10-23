@@ -12,6 +12,7 @@ import {
   DESKTOP_EVENTS, DesktopHockiController, alertActive, type DesktopSnapshot,
 } from "../hocki/desktop-logic";
 import { SeasonCache, parseOutfit } from "../hocki/wardrobe";
+import { browserKV } from "../hocki/storage";
 
 /** Label of the desktop Hocki's window (desktop.rs LABEL). */
 const WINDOW = "hocki";
@@ -38,6 +39,7 @@ export class DesktopLink {
   private pendingCarry: { x: number; y: number } | null = null;
   private carryFrame = false;
   private host: DesktopHost;
+  private kv = browserKV();
 
   constructor(host: DesktopHost) {
     this.host = host;
@@ -68,12 +70,16 @@ export class DesktopLink {
     const info = await Bridge.desktopInfo();
     if (!info || info.mode === "off") return;
     this.mode = info.mode;
-    this.controller.enabled = info.onDesktop;
+    // En Windows Hocki sale a pasear solo, salvo que lo hayas mandado a casa.
+    this.controller.enabled = info.onDesktop || (info.mode === "poll" && this.kv.get("hocki.homed") !== "1");
 
     await onEvent<{ from: "island" | "desktop"; home: boolean }>(DESKTOP_EVENTS.dropped, (e) =>
       this.onDropped(e.from, e.home),
     );
-    await onEvent<null>(DESKTOP_EVENTS.home, () => void this.controller.flyHome());
+    await onEvent<null>(DESKTOP_EVENTS.home, () => {
+      this.kv.set("hocki.homed", "1");
+      void this.controller.flyHome();
+    });
     await onEvent<null>(DESKTOP_EVENTS.wardrobe, () => this.host.wardrobeFromDesktop());
     await onEvent<null>(DESKTOP_EVENTS.dizzy, () => this.host.dizzyFromDesktop());
     // The window's page (re)loaded: it knows nothing yet.
@@ -97,18 +103,22 @@ export class DesktopLink {
    */
   flyOutOrHome() {
     if (!this.supported || this.carrying) return;
+    this.kv.set("hocki.homed", State.hockiOnDesktop ? "1" : "0");
     void this.controller.flyOutOrHome();
   }
 
   /** "Sal a pasear": de la isla al escritorio, si no está ya allí. */
   walkOut() {
     if (!this.supported || this.carrying || State.hockiOnDesktop) return;
+    this.kv.set("hocki.homed", "0");
+    this.kv.set("hocki.roam", "on");
     void this.controller.flyOutOrHome();
   }
 
   /** "Vuelve a la isla": del escritorio a casa. */
   walkHome() {
     if (!this.supported || this.carrying || !State.hockiOnDesktop) return;
+    this.kv.set("hocki.homed", "1");
     void this.controller.flyOutOrHome();
   }
 

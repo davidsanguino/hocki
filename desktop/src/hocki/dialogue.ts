@@ -172,7 +172,7 @@ export interface SpeakerSettings {
   quietWhenBusy: boolean;
 }
 
-export const DEFAULT_SPEAKER: SpeakerSettings = { enabled: false, volume: 0.8, rate: 1, quietWhenBusy: true };
+export const DEFAULT_SPEAKER: SpeakerSettings = { enabled: true, volume: 0.9, rate: 1.04, quietWhenBusy: true };
 
 export class Speaker {
   settings: SpeakerSettings;
@@ -197,6 +197,43 @@ export class Speaker {
   }
 }
 
+/** Voz elegida a mano (índice en la lista ordenada); -1 = automática. */
+export const voicePrefs = { index: -1 };
+
+type VoiceLike = { lang: string; name: string };
+const isEs = (v: VoiceLike) => v.lang.toLowerCase().replace("_", "-").startsWith("es");
+const MALE = /gonzalo|jorge|alvaro|pablo|diego|carlos|andres|tomas|alex|raul|male|hombre/i;
+
+/** Voces en español, de más a menos natural: latinas, "Natural/Online" y de chico joven primero. */
+export function rankVoices<T extends VoiceLike>(voices: T[]): T[] {
+  const score = (v: T) => {
+    const l = v.lang.toLowerCase().replace("_", "-");
+    let n = 0;
+    if (/es-(co|mx|us|419|ar|cl|pe|ve)/.test(l)) n += 4; else if (l.startsWith("es-es")) n += 1;
+    if (/natural|online/i.test(v.name)) n += 5;
+    if (MALE.test(v.name)) n += 2;
+    return n;
+  };
+  return voices.filter(isEs).sort((a, b) => score(b) - score(a));
+}
+
+export function pickVoice<T extends VoiceLike>(voices: T[]): T | null {
+  const r = rankVoices(voices);
+  if (!r.length) return null;
+  return voicePrefs.index >= 0 ? r[voicePrefs.index % r.length] : r[0];
+}
+
+/** Tono juvenil: más agudo en voz de chico, un poco menos en la de chica. */
+export function pitchFor(v: VoiceLike | null): number {
+  return v && MALE.test(v.name) ? 1.14 : 1.08;
+}
+
+/** Nombres de las voces en español instaladas (para "cambia de voz"). */
+export function spanishVoiceNames(): string[] {
+  const w = globalThis as unknown as { speechSynthesis?: SpeechSynthesis };
+  return w.speechSynthesis ? rankVoices(w.speechSynthesis.getVoices()).map((v) => v.name) : [];
+}
+
 /** Altavoz real del navegador/webview; devuelve null si no hay síntesis de voz. */
 export function browserBackend(): SpeechBackend | null {
   const w = globalThis as unknown as { speechSynthesis?: SpeechSynthesis; SpeechSynthesisUtterance?: typeof SpeechSynthesisUtterance };
@@ -206,8 +243,9 @@ export function browserBackend(): SpeechBackend | null {
     speak(text, o) {
       const u = new Utter(text);
       u.lang = o.lang; u.rate = o.rate; u.volume = o.volume;
-      const voice = synth.getVoices().find((v) => v.lang.toLowerCase().startsWith("es"));
-      if (voice) u.voice = voice;
+      const voice = pickVoice(synth.getVoices());
+      u.pitch = pitchFor(voice); // tono juvenil, sin llegar a caricatura
+      if (voice) { u.voice = voice; u.lang = voice.lang; }
       synth.cancel();
       synth.speak(u);
     },

@@ -15,10 +15,10 @@ import {
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import { SPOTIFY_ID, islandDances } from "../core/spotify";
-import { BotEngine } from "../hocki/engine";
+import { newHockiEngine } from "../hocki/engine";
 import { Greeting } from "../hocki/greeting";
 import { createMiniBot, pruneMiniBots, setMiniCursor, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
-import { Speaker, browserBackend, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
+import { Speaker, browserBackend, voicePrefs, spanishVoiceNames, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
 import { professionById } from "../hocki/professions";
 import { browserKV } from "../hocki/storage";
 import { parseVoice, stripName } from "../hocki/voice-commands";
@@ -79,7 +79,7 @@ export class Island {
   private botCy = new Spring(16);
   private botSize = new Spring(10);
 
-  private engine = new BotEngine();
+  private engine = newHockiEngine();
   private greeting = new Greeting();
   private speaker = new Speaker(browserBackend() ?? { speak() {}, cancel() {} });
   private voice = new VoiceService({
@@ -104,6 +104,7 @@ export class Island {
   });
   private kv = browserKV();
   private chatterAt = Date.now();
+  private lastEcho = 0;
   private greetingShown = false;
   private seasons = new SeasonCache();
 
@@ -159,6 +160,7 @@ export class Island {
     setInterval(() => this.backgroundTick(), 1000);
     window.addEventListener("hocki-action", (e) => this.doAction((e as CustomEvent<HockiAction>).detail));
     // Si la persona pidió que lo escuche siempre, vuelve a encender el micrófono al arrancar.
+    { const n = Number(this.kv.get("hocki.voice")); voicePrefs.index = Number.isInteger(n) && n >= 0 && this.kv.get("hocki.voice") !== null ? n : -1; }
     if (this.kv.get("hocki.listen") === "on") window.setTimeout(() => { if (!this.voice.on) this.toggleVoice(); }, 3000);
     // Primera vez: Hocki se presenta y le pregunta su nombre y su oficio para adaptarse a cualquier persona.
     const first = brain.onboardingPrompt();
@@ -499,7 +501,15 @@ export class Island {
   /** Lo que se oyó: solo reacciona si le hablan a Hocki (o si le dicen que pare). */
   private onVoiceHeard(text: string) {
     const cmd = parseVoice(text);
-    if (!cmd.addressed && cmd.intent !== "stop") return;
+    if (!cmd.addressed && cmd.intent !== "stop") {
+      // Que se note que el micrófono sí oye: si no era una orden, lo decimos (como mucho cada 40 s).
+      if (text.trim() && Date.now() - this.lastEcho > 40_000) {
+        this.lastEcho = Date.now();
+        State.chatHistory.push({ id: Date.now(), role: "assistant", content: `Te oí: «${text.trim()}». Si es una orden, empieza con «Hocki…» (por ejemplo «Hocki, ábrete»).` });
+        State.notify();
+      }
+      return;
+    }
     const spoken = stripName(text);
     // 1) Lo que Hocki resuelve solo: recordar, programar, listar, cambiar de oficio…
     const local = cmd.intent === "unknown" && spoken ? brain.handle(spoken) : null;
@@ -608,6 +618,25 @@ export class Island {
       case "home":
         this.desktop.walkHome();
         break;
+      case "voice_test":
+        this.speaker.resume();
+        this.speaker.settings.enabled = true;
+        this.say("¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?");
+        break;
+      case "voice_next": {
+        const names = spanishVoiceNames();
+        if (!names.length) {
+          this.pushChat("", "No encuentro voces en español en este equipo. Instálalas en Windows: Configuración → Hora e idioma → Voz → Agregar voces.");
+          break;
+        }
+        voicePrefs.index = (voicePrefs.index + 1) % names.length;
+        this.kv.set("hocki.voice", String(voicePrefs.index));
+        this.speaker.resume();
+        this.speaker.settings.enabled = true;
+        this.pushChat("", `Voz ${voicePrefs.index + 1} de ${names.length}: ${names[voicePrefs.index]}. Di «cambia de voz» para oír la siguiente.`);
+        this.say("¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?");
+        break;
+      }
       case "listen_on":
         this.kv.set("hocki.listen", "on");
         if (!this.voice.on) this.toggleVoice();

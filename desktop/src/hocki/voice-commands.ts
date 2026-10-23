@@ -84,30 +84,33 @@ export function parseVoice(raw: string): VoiceResult {
   if (!addressed && has(s, "fuera de aqui", "para ya", "detente ya")) {
     return { intent: "stop", addressed: false };
   }
-  if (!addressed) return { intent: "unknown", addressed: false };
+  // El reconocedor a veces se come el nombre: una orden corta ("ábrete", "a pasear") vale igual.
+  if (!addressed && tokens.length > 4) return { intent: "unknown", addressed: false };
+  const q = addressed || tokens.length > 2 ? s : `hocki ${s} hocki`;
+  const ok = true;
 
-  if (has(s, "donde estas", "donde andas", "donde te metiste", "donde te escondes")) return { intent: "where", addressed };
-  if (has(s, "resumen del dia", "resumen de hoy", "como estuvo mi dia", "resume mi dia")) return { intent: "summary", addressed };
-  if (has(s, "abre hocki", "abrir hocki", "hocki abre", "hocki abrete", "abrete hocki", "inicia hocki", "iniciar hocki",
+  if (has(q, "donde estas", "donde andas", "donde te metiste", "donde te escondes")) return { intent: "where", addressed: ok };
+  if (has(q, "resumen del dia", "resumen de hoy", "como estuvo mi dia", "resume mi dia")) return { intent: "summary", addressed: ok };
+  if (has(q, "abre hocki", "abrir hocki", "hocki abre", "hocki abrete", "abrete hocki", "inicia hocki", "iniciar hocki",
     "hocki inicia", "hocki iniciate", "enciende hocki", "hocki enciende", "arranca hocki", "hocki arranca", "activate hocki", "hocki activate")) {
-    return { intent: "open", addressed };
+    return { intent: "open", addressed: ok };
   }
-  if (has(s, "cierra hocki", "cerrar hocki", "hocki cierra", "hocki cierrate", "cierrate hocki", "apaga hocki", "hocki apagate", "apagate hocki")) {
-    return { intent: "close", addressed };
+  if (has(q, "cierra hocki", "cerrar hocki", "hocki cierra", "hocki cierrate", "cierrate hocki", "apaga hocki", "hocki apagate", "apagate hocki")) {
+    return { intent: "close", addressed: ok };
   }
-  if (has(s, "quedate quieto", "hocki quieto", "quieto hocki", "no pasees", "deja de pasear", "dejar de pasear", "para de caminar", "no camines")) {
-    return { intent: "still", addressed };
+  if (has(q, "quedate quieto", "hocki quieto", "quieto hocki", "no pasees", "deja de pasear", "dejar de pasear", "para de caminar", "no camines")) {
+    return { intent: "still", addressed: ok };
   }
-  if (has(s, "a pasear", "hocki pasea", "pasea hocki", "hocki camina", "camina hocki", "al escritorio")) return { intent: "walk", addressed };
-  if (has(s, "a la isla", "vuelve a la isla", "regresa a la isla", "hocki a casa", "vuelve a casa")) return { intent: "home", addressed };
-  if (has(s, "a dormir", "reposo", "descansa", "duermete")) return { intent: "sleep", addressed };
-  if (has(s, "escondete", "apartate", "quitate", "oculta")) return { intent: "hide", addressed };
-  if (has(s, "hocki ven", "ven hocki", "aparece", "sal hocki", "hocki sal")) return { intent: "show", addressed };
-  if (has(s, "hola hocki", "oye hocki", "hey hocki", "ey hocki", "hocki despierta", "despierta hocki", "buenos dias hocki")) {
-    return { intent: "wake", addressed };
+  if (has(q, "a pasear", "hocki pasea", "pasea hocki", "hocki camina", "camina hocki", "al escritorio")) return { intent: "walk", addressed: ok };
+  if (has(q, "a la isla", "vuelve a la isla", "regresa a la isla", "hocki a casa", "vuelve a casa")) return { intent: "home", addressed: ok };
+  if (has(q, "a dormir", "reposo", "descansa", "duermete")) return { intent: "sleep", addressed: ok };
+  if (has(q, "escondete", "apartate", "quitate", "oculta")) return { intent: "hide", addressed: ok };
+  if (has(q, "hocki ven", "ven hocki", "aparece", "sal hocki", "hocki sal")) return { intent: "show", addressed: ok };
+  if (addressed && has(q, "hola hocki", "oye hocki", "hey hocki", "ey hocki", "hocki despierta", "despierta hocki", "buenos dias hocki")) {
+    return { intent: "wake", addressed: ok };
   }
   // Solo el nombre ("¡Hocki!") también lo despierta.
-  if (tokens.length === 1) return { intent: "wake", addressed };
+  if (tokens.length === 1 && addressed) return { intent: "wake", addressed: ok };
   return { intent: "unknown", addressed };
 }
 

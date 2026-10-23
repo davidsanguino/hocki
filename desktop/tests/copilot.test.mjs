@@ -128,7 +128,7 @@ test("otras órdenes", () => {
 });
 
 test("sin nombrar a Hocki no se activa nada, salvo parar", () => {
-  assert.equal(parseVoice("resumen del día").intent, "unknown");
+  assert.equal(parseVoice("la reunión de ayer fue larga").intent, "unknown");
   assert.equal(parseVoice("buenas tardes a todos").intent, "unknown");
   assert.equal(parseVoice("").intent, "unknown");
   assert.equal(normalize("¡Escóndete, Hocki!"), "escondete hocki");

@@ -293,8 +293,9 @@ test("comandos de voz para abrir, cerrar, pasear y quedarse quieto", () => {
     "¿Dónde estás, Hocki?": "where",
   };
   for (const [phrase, intent] of Object.entries(cases)) assert.equal(parseVoice(phrase).intent, intent, phrase);
-  assert.equal(parseVoice("abre el navegador").addressed, false); // sin nombrar a Hocki no hace nada
-  assert.equal(parseVoice("abre el navegador").intent, "unknown");
+  assert.equal(parseVoice("abre el navegador").intent, "unknown"); // frases largas sin nombre no hacen nada
+  assert.equal(parseVoice("ábrete").intent, "open");                // órdenes cortas valen aunque se pierda el nombre
+  assert.equal(parseVoice("a pasear").intent, "walk");
 });
 
 test("las órdenes de voz se convierten en acciones", () => {

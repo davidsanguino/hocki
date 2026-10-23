@@ -10,7 +10,7 @@
 import { Bridge, emitToWindow, onEvent, type DesktopMode } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
 import { Sound } from "../core/sound";
-import { BotEngine } from "../hocki/engine";
+import { newHockiEngine } from "../hocki/engine";
 import { DesktopRoamer } from "../hocki/desktop-roam";
 import { browserKV } from "../hocki/storage";
 import {
@@ -33,7 +33,7 @@ const AWAKE_FRAME_MS = 1000 / 30;
 const ASLEEP_FRAME_MS = 250;
 
 class DesktopHocki {
-  private engine = new BotEngine();
+  private engine = newHockiEngine();
   private canvas: HTMLCanvasElement;
   private mode: DesktopMode = "off";
 

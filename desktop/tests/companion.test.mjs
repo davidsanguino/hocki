@@ -75,7 +75,8 @@ test("el altavoz respeta apagado, ocupado y la parada", () => {
   const said = [];
   const backend = { speak: (t) => said.push(t), cancel: () => said.push("<cancel>") };
   const sp = new Speaker(backend);
-  assert.equal(sp.say("hola", { busy: false }), false);        // apagado por defecto
+  sp.settings.enabled = false;
+  assert.equal(sp.say("hola", { busy: false }), false);        // apagado
   sp.settings.enabled = true;
   assert.equal(sp.say("hola", { busy: true }), false);          // la persona está escribiendo
   assert.equal(sp.say("hola", { busy: false }), true);
@@ -176,7 +177,7 @@ test("'¿Dónde estás, Hocki?' en sus formas habituales", () => {
   for (const f of ["¿Dónde estás, Hocki?", "Hocki, ¿dónde estás?", "dónde andas Hocki", "Hoki donde estas"]) {
     assert.equal(parseVoice(f).intent, "where", f);
   }
-  assert.equal(parseVoice("¿dónde estás?").intent, "unknown"); // sin nombrarlo no responde
+  assert.equal(parseVoice("¿dónde estás?").intent, "where"); // el reconocedor a veces pierde el nombre
 });
 
 test("responde 'Acá estoy, jefe' y pide mostrar la isla", () => {

@@ -86,7 +86,7 @@ export const HELP_TEXT = [
 ].join("\n");
 
 /** Cosas que Hocki hace en pantalla; las ejecuta la isla al recibirlas. */
-export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off";
+export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off" | "voice_next" | "voice_test";
 export interface LocalReply { text: string; action?: HockiAction }
 
 const HINT_AFTER = "\nSi quieres, dime «activa mis rutinas» para recordatorios de tu oficio y «activa tu memoria» para que recuerde lo que me pidas. «comandos» muestra todo.";
@@ -244,6 +244,8 @@ export class HockiBrain {
       return { text: "¡Voy a pasear! Me aparto cuando estés haciendo clic o escribiendo.", action: "walk" };
     if (/\b(quedate quieto|no pasees|deja de pasear|no camines)\b/.test(t)) return { text: "Me quedo quietecito aquí.", action: "still" };
     if (/\b(vuelve a la isla|regresa a la isla|a la isla)\b/.test(t)) return { text: "Vuelvo a la isla.", action: "home" };
+    if (/\b(cambia (de|tu) voz|otra voz|prueba otra voz|voz diferente)\b/.test(t)) return { text: "Probando otra voz…", action: "voice_next" };
+    if (/\b(prueba tu voz|habla para probar|di algo|hablame)\b/.test(t)) return { text: "¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?", action: "voice_test" };
     if (/\b(escuchame siempre|escucha siempre|activa (el )?micro(fono)?|activa la voz|activa tu oido)\b/.test(t))
       return { text: "Listo, te escucho. Dime «Hocki» antes de cada orden o pregunta. En Windows uso el reconocimiento de voz del propio sistema, sin internet; necesita el idioma español con voz instalado.", action: "listen_on" };
     if (/\b(deja de escuchar|desactiva (el )?micro(fono)?|apaga la voz|no me escuches)\b/.test(t))
