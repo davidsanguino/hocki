@@ -12,7 +12,10 @@ import { parseJobRequest } from "./schedule-nl";
 import { buildSummary, type DayEvent } from "./daily-summary";
 import { normalize } from "./voice-commands";
 import type { ActionRequest, Grants, Level, PermissionEngine } from "./permissions";
-import { matchApp, type AppAutomation, type AppDef } from "./apps";
+import { appNames, cleanProgramName, matchApp, type AppAutomation, type AppDef } from "./apps";
+import { matchSkill, sendKeysText, skillsFor } from "./app-skills";
+import { LEGAL_NOTICE, PRIVACY_NOTICE } from "./notices";
+import { findInstalled, ingest, summarize, type InstalledApp, type Inventory } from "./installed";
 import { TOOLS, toolById, toolHelp, toolPrompt, type Tool } from "./tools";
 import type { KV } from "./storage";
 
@@ -54,6 +57,18 @@ export interface BrainState {
   tool?: string;
   grants?: Grants;
   apps?: string[];
+  /** Programas propios que le pediste abrir (nombre para buscarlos en el menú Inicio). */
+  customs?: { id: string; name: string; find: string[] }[];
+  /** Botones y menús que Hocki aprendió de cada programa (solo nombres). */
+  learned?: Record<string, string[]>;
+  /** Ya vio los avisos de privacidad y legal del control de programas. */
+  noticesShown?: boolean;
+  /** Aceptó que Hocki mire la pantalla y la envíe a la IA que eligió. */
+  screenConsent?: boolean;
+  /** Lo que tiene instalado (nombres y AppID) y si dio permiso para leerlo. */
+  inventory?: Inventory;
+  inventoryConsent?: boolean;
+  scanOffered?: boolean;
   profession: string;
   name?: string;
   memory: MemoryData;
@@ -71,8 +86,33 @@ export interface BrainDeps {
   /** Catálogo de apps y sus permisos; sin él, Hocki no abre aplicaciones. */
   apps?: AppAutomation;
   /** Abre de verdad una app ya autorizada (lo pone cada plataforma). */
-  launch?: (app: AppDef) => void;
+  launch?: (app: AppDef) => Promise<boolean> | void;
+  /** Pide a una app que cierre sus ventanas (cuántas cerró). */
+  close?: (app: AppDef) => Promise<number> | void;
+  /** Avisa de algo que ocurre después de responder (por ejemplo: «no encontré ese programa»). */
+  notify?: (text: string) => void;
+  /** Maneja un programa: "keys" (atajo), "type" (texto), "click" (botón/menú) o "list" (aprender). */
+  act?: (app: AppDef, action: AppAction, arg: string) => Promise<string[]> | void;
+  agent?: AgentPort;
+  /** Lee la lista de programas y apps del equipo (solo nombres). */
+  scan?: () => Promise<InstalledApp[]>;
+  /** Nombre de la IA elegida en Ajustes, para decir a dónde van las capturas. */
+  aiName?: () => string;
 }
+
+export type AppAction = "keys" | "type" | "click" | "list";
+interface PendingAct { appId: string; action: AppAction | "agent"; arg: string; label: string }
+
+/** El ayudante de pantalla (screen-agent.ts): mira, piensa con la IA elegida y actúa. */
+export interface AgentPort {
+  start(app: AppDef, goal: string, learned: string[], done: (r: { status: string; message: string; steps: number }) => void): boolean;
+  answer(yes: boolean): boolean;
+  waiting(): boolean;
+  busy(): boolean;
+  halt(): void;
+}
+
+export const SCAN_OFFER = "¿Me dejas estudiar tu equipo? Leo solo la lista de programas y apps del menú Inicio (los que instalaste y los de fábrica) para poder ayudarte con cualquiera. No abro nada, no miro tus archivos y no sale de este equipo. Para actuar en cada programa te pediré permiso la primera vez. ¿Sí o no?";
 
 export const HELP_TEXT = [
   "Esto puedo hacer por ti, solo escríbemelo:",
@@ -81,12 +121,15 @@ export const HELP_TEXT = [
   "• \"Recuérdame llamar a mamá en 10 minutos\" o \"…mañana a las 8\" o \"cada 30 minutos\".",
   "• \"Qué tengo programado\", \"cancela todo\", \"qué pasó mientras no estaba\", \"registro de hoy\".",
   "• \"Sal a pasear\" / \"quédate quieto\" / \"vuelve a la isla\": me muevo por tu pantalla sin estorbar.",
+  "• \"Registra mi voz\": aprendo cómo suena tu voz (con tu permiso y el del micrófono) y solo te obedezco a ti. \"Borra mi voz\" la elimina. \"Cambia de voz\" prueba otra voz mía.",
   "• \"Escúchame siempre\": activo la voz. Dime \"Hocki, abre\", \"Hocki, cierra\" o \"Hocki fuera\".",
-  "• \"Abre Photoshop\" (Word, Excel, Blender, AutoCAD…): abro tus programas con tu permiso. \"Ayúdame con Blender\": te escribo scripts, macros y guías.",
+  "• \"Estudia mi equipo\": aprendo qué programas y apps tienes. \"¿Qué programas tengo?\", \"¿tengo Blender?\".",
+  "• \"En Illustrator, hazlo tú: exporta el logo en PNG\": miro la pantalla y lo hago paso a paso con la IA que elegiste (\"para\" me detiene).",
+  "• \"Abre Photoshop\" / \"cierra Photoshop\" (Word, Excel, Blender, AutoCAD… o cualquier programa instalado): lo hago con tu permiso, programa por programa. \"Ayúdame con Blender\": te escribo scripts, macros y guías.",
 ].join("\n");
 
 /** Cosas que Hocki hace en pantalla; las ejecuta la isla al recibirlas. */
-export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off" | "voice_next" | "voice_test";
+export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off" | "voice_next" | "voice_test" | "voice_enroll" | "voice_forget" | "voice_gate_on" | "voice_gate_off";
 export interface LocalReply { text: string; action?: HockiAction }
 
 const HINT_AFTER = "\nSi quieres, dime «activa mis rutinas» para recordatorios de tu oficio y «activa tu memoria» para que recuerde lo que me pidas. «comandos» muestra todo.";
@@ -102,6 +145,24 @@ export class HockiBrain {
   /** Herramienta con la que se está trabajando (Blender, Excel…): da contexto a la IA. */
   tool?: string;
   private pendingApp: string | null = null;
+  private pendingEnroll = false;
+  private pendingAfter: "open" | "close" | "act" = "open";
+  private pendingAct: PendingAct | null = null;
+  private pendingDelicate: PendingAct | null = null;
+  /** El programa con el que se está trabajando ahora (el último abierto o nombrado). */
+  activeApp?: string;
+  learned: Record<string, string[]> = {};
+  private noticesShown = false;
+  private screenConsent = false;
+  inventory: Inventory | null = null;
+  private inventoryConsent = false;
+  private scanOffered = false;
+  private pendingScan = false;
+  private scanning = false;
+  /** Programa → AppID de Windows (para abrir también las apps de la Tienda). */
+  private appIds = new Map<string, string>();
+  private pendingScreen: PendingAct | null = null;
+  private lastGoal: { appId: string; goal: string } | null = null;
   memory: MemoryStore;
   journal: Journal;
   jobs: JobRunner;
@@ -116,7 +177,17 @@ export class HockiBrain {
     this.name = saved?.name;
     this.onboard = saved?.onboard ?? (saved ? "done" : "name");
     this.tool = saved?.tool;
+    this.learned = saved?.learned ?? {};
+    this.noticesShown = !!saved?.noticesShown;
+    this.screenConsent = !!saved?.screenConsent;
+    this.inventoryConsent = !!saved?.inventoryConsent;
+    this.scanOffered = !!saved?.scanOffered;
+    if (saved?.inventory && Array.isArray(saved.inventory.apps)) {
+      this.inventory = saved.inventory;
+      if (deps.apps) ingest(this.inventory, deps.apps, this.appIds);
+    }
     if (saved?.grants) { deps.engine.grants.level = saved.grants.level; deps.engine.grants.kinds = { ...saved.grants.kinds }; }
+    for (const c of saved?.customs ?? []) deps.apps?.addCustom({ id: c.id, name: c.name, launch: {}, find: c.find });
     for (const id of saved?.apps ?? []) deps.apps?.grantApp(id);
     this.memory = new MemoryStore(this.now, saved?.memory);
     this.journal = new Journal(this.now, saved?.journal ?? []);
@@ -134,7 +205,7 @@ export class HockiBrain {
   }
 
   save() {
-    const s: BrainState = { onboard: this.onboard, tool: this.tool, grants: this.d.engine.grants, apps: this.d.apps?.grantedIds(), profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
+    const s: BrainState = { onboard: this.onboard, tool: this.tool, grants: this.d.engine.grants, apps: this.d.apps?.grantedIds(), customs: this.d.apps?.list().filter((a) => a.custom && a.find && !a.id.startsWith("i-")).map((a) => ({ id: a.id, name: a.name, find: a.find! })), learned: this.learned, noticesShown: this.noticesShown, screenConsent: this.screenConsent, inventory: this.inventory ?? undefined, inventoryConsent: this.inventoryConsent, scanOffered: this.scanOffered, profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
     this.d.kv.set(KEY, JSON.stringify(s));
   }
 
@@ -218,6 +289,11 @@ export class HockiBrain {
   private route(text: string, t: string): LocalReply | null {
     if (this.onboard !== "done") {
       const r = this.onboard_(text, t);
+      if (r && (this.onboard as OnboardStep) === "done" && !this.inventoryConsent && !this.scanOffered && this.d.scan) {
+        this.scanOffered = true;
+        this.pendingScan = true;
+        return { ...r, text: `${r.text}\n\n${SCAN_OFFER}` };
+      }
       if (r) return r;
     }
     // Respuesta a una autorización pendiente (solo la más reciente)
@@ -234,10 +310,15 @@ export class HockiBrain {
       }
     }
 
+    const inv = this.inventoryRoute(text, t);
+    if (inv) return inv;
+
     const sys = this.systemRoute(t);
     if (sys) return sys;
 
-    if (/\b(comandos|que sabes hacer|que puedo pedirte|como uso la memoria)\b/.test(t)) return { text: HELP_TEXT };
+    if (/\b(comandos|que sabes hacer|que puedo pedirte|como uso la memoria)\b/.test(t) && !/\b(sabes|puedes) hacer (en|con) /.test(t)) return { text: HELP_TEXT };
+    if (/\b(aviso de privacidad|privacidad)\b/.test(t) && t.split(" ").length <= 5) return { text: PRIVACY_NOTICE };
+    if (/\baviso legal\b/.test(t)) return { text: LEGAL_NOTICE };
 
     // Cuerpo y voz de Hocki
     if (/\b(sal a pasear|ve a pasear|pasea|camina libre|ven al escritorio|sal al escritorio)\b/.test(t))
@@ -341,6 +422,8 @@ export class HockiBrain {
       const e = this.journal.today();
       return { text: e.length ? this.journal.toText(e) : "Hoy aún no hay nada en el registro." };
     }
+    const ctl = this.appControl(text, t);
+    if (ctl) return ctl;
     return null;
   }
 
@@ -383,7 +466,20 @@ export class HockiBrain {
     }
     if (/^(reactivate|reanuda|vuelve a trabajar|continua)$/.test(t)) { this.resumeAll(); return { text: "Listo, estoy de vuelta." }; }
 
-    // Respuesta al "¿me das permiso para abrir X?"
+    // Registro de la voz: primero se pide el consentimiento
+    if (this.pendingEnroll) {
+      if (/^(si|dale|claro|ok|listo|empecemos|de una|empieza)$/.test(t)) { this.pendingEnroll = false; return { text: "Perfecto. Windows te va a pedir permiso para el micrófono: acéptalo.", action: "voice_enroll" }; }
+      if (/^(no|nunca|no gracias|cancela|luego)$/.test(t)) { this.pendingEnroll = false; return { text: "Está bien, no guardo tu voz. Cuando quieras, dime «registra mi voz»." }; }
+    }
+    if (/\b(registra|guarda|aprende|recuerda|entrena|configura)\b.*\b(mi voz|voz)\b|\bprueba (inicial )?de voz\b|\breconoce(me)? (mi voz|por la voz)\b/.test(t) && !/\b(borra|olvida|elimina)\b/.test(t)) {
+      this.pendingEnroll = true;
+      return { text: "Para reconocer tu voz guardo una huella de números (nunca el audio) solo en este equipo; la borras cuando quieras con «borra mi voz». Te pediré decir unas 4 frases cortas. No es una seguridad fuerte: lo importante (pagos, claves) seguirá pidiendo tu verificación. ¿Empezamos? «sí» o «no»." };
+    }
+    if (/\b(borra|olvida|elimina|quita)\b.*\bmi voz\b/.test(t)) return { text: "Listo, borré tu huella de voz.", action: "voice_forget" };
+    if (/\b(obedece(me)? (solo )?a (cualquiera|todos)|escucha a cualquiera|no importa quien hable)\b/.test(t)) return { text: "Entendido, te oigo a ti y a cualquiera.", action: "voice_gate_off" };
+    if (/\b(obedece(me)? solo a mi|solo mi voz|solo a mi voz|solo me obedezcas a mi)\b/.test(t)) return { text: "Listo, solo obedezco a tu voz (si ya la registraste).", action: "voice_gate_on" };
+
+    // Respuesta al "¿me das permiso para abrir/cerrar X?"
     if (this.pendingApp && apps) {
       const app = apps.app(this.pendingApp);
       if (/^(si|dale|claro|ok|listo|de una|permiso concedido)$/.test(t) && app) {
@@ -391,10 +487,16 @@ export class HockiBrain {
         apps.grantApp(app.id);
         if (this.d.engine.grants.level === "off") this.d.engine.grants.level = "confirm";
         this.d.engine.grants.kinds.open_app = true;
-        this.journal.add("approval", `Permiso para abrir ${app.name}`);
-        return this.openApp(app);
+        this.journal.add("approval", `Permiso para abrir, cerrar y manejar ${app.name}`);
+        const first = this.noticesShown ? "" : `\n\n${PRIVACY_NOTICE}\n\n${LEGAL_NOTICE}`;
+        this.noticesShown = true;
+        const r = this.pendingAfter === "close" ? this.closeApp(app)
+          : this.pendingAfter === "act" && this.pendingAct ? this.runAct(app, this.pendingAct)
+          : this.openApp(app);
+        this.pendingAct = null;
+        return { ...r, text: r.text + first };
       }
-      if (/^(no|nunca|no gracias|cancela)$/.test(t)) { this.pendingApp = null; return { text: "Entendido, no la abro." }; }
+      if (/^(no|nunca|no gracias|cancela)$/.test(t)) { this.pendingApp = null; this.pendingAct = null; return { text: "Entendido, no toco esa app." }; }
     }
     m = t.match(/^(?:quita|retira|revoca)\s+(?:el )?permiso\s+(?:de |para |a )?(.+)/);
     if (m && apps) {
@@ -402,16 +504,20 @@ export class HockiBrain {
       if (app) { apps.revokeApp(app.id); return { text: `Listo, ya no puedo abrir ${app.name}.` }; }
     }
 
-    // Abrir una aplicación
+    // Abrir o cerrar una aplicación
     m = t.match(/^(?:por favor\s+)?(?:abre|abreme|abrir|inicia|lanza|ejecuta|open)\s+(.+)/);
-    if (m && apps && !/\b(hocki|isla|chat|memoria)\b/.test(m[1])) {
-      const app = matchApp(m[1], apps.list());
+    const mc = m ? null : t.match(/^(?:por favor\s+)?(?:cierra|cierrame|cerrar|apaga|termina|close)\s+(.+)/);
+    const target = (m ?? mc)?.[1];
+    if (target && apps && !/\b(hocki|isla|chat|memoria|ventana|todo|sesion|conversacion|archivo|documento|carpeta|proyecto|imagen|correo|pestana)\b/.test(target)) {
+      const app = matchApp(target, apps.list()) ?? this.customApp(target);
       if (!app) return null;
+      const after = m ? "open" : "close";
       if (!apps.isGranted(app.id)) {
         this.pendingApp = app.id;
-        return { text: `Para abrir ${app.name} necesito tu permiso (solo para abrirla). ¿Me lo das? Responde «sí» o «no».` };
+        this.pendingAfter = after;
+        return { text: `Para ${after === "open" ? "abrir" : "cerrar"} ${app.name} necesito tu permiso, una sola vez: abrirla, cerrarla y manejarla por dentro cuando me lo pidas (antes de borrar, enviar o publicar te pregunto). ¿Me lo das? Responde «sí» o «no».` };
       }
-      return this.openApp(app);
+      return after === "open" ? this.openApp(app) : this.closeApp(app);
     }
 
     // Trabajar con una herramienta
@@ -431,7 +537,8 @@ export class HockiBrain {
       if (tool) {
         this.tool = tool.id;
         const hint = apps?.app(tool.id) && !apps.isGranted(tool.id) ? `\nSi quieres que la abra, dime «abre ${tool.name}».` : "";
-        return { text: toolHelp(tool) + hint };
+        const inApp = apps?.app(tool.id);
+        return { text: toolHelp(tool) + hint + (inApp ? `\n\n${this.skillsHelp(inApp)}` : "") };
       }
     }
     return null;
@@ -453,10 +560,346 @@ export class HockiBrain {
       const cid = this.d.engine.openConfirmation(res.request!, false);
       this.d.engine.approve(cid);
     }
-    this.d.launch?.(app);
+    const launched = this.d.launch?.(app);
+    if (launched && typeof (launched as Promise<boolean>).then === "function") {
+      void (launched as Promise<boolean>).then((ok) => {
+        if (!ok) { this.d.notify?.(`No encontré «${app.name}» instalado en este equipo (la busco en el menú Inicio). Dime cómo aparece ahí su nombre.`); return; }
+        // La primera vez que se abre, Hocki aprende en silencio sus botones y menús.
+        if (!this.learned[app.id] && this.d.act && typeof setTimeout === "function") {
+          setTimeout(() => {
+            const r = this.d.act?.(app, "list", "");
+            if (r && typeof (r as Promise<string[]>).then === "function") {
+              void (r as Promise<string[]>).then((lines) => {
+                const names = (lines ?? []).filter((l) => l.startsWith("N:")).map((l) => l.slice(2)).slice(0, 200);
+                if (names.length) { this.learned[app.id] = names; this.save(); }
+              });
+            }
+          }, 9000);
+        }
+      });
+    }
     this.journal.add("approval", `Abrí ${app.name}`);
+    this.activeApp = app.id;
     const help = toolById(app.id) ? ` Si quieres ayuda con ella, dime «ayúdame con ${app.name}».` : "";
     return { text: `Abriendo ${app.name}…${help}` };
+  }
+
+  private closeApp(app: AppDef): LocalReply {
+    const apps = this.d.apps;
+    if (!apps) return { text: "Cerrar aplicaciones no está disponible aquí." };
+    const res = apps.close(app.id, "user", { resting: this.d.resting?.() ?? false });
+    const d = res.decision;
+    if (d.type === "deny") {
+      if (/detenido/.test(d.reason)) return { text: "Estoy detenido. Escribe «reactívate» para volver." };
+      return { text: `No puedo cerrar ${app.name}: ${d.reason}. Escribe «modo confirmar» para darme ese permiso.` };
+    }
+    if (d.type === "suggest_only") return { text: `Estoy en modo sugerir: cierra ${app.name} tú. Escribe «modo confirmar» si quieres que lo haga yo.` };
+    if (d.type === "ask") {
+      if (d.needsBiometric) return { text: `${app.name} es sensible: ciérrala tú. Yo no la toco sin tu verificación.` };
+      const cid = this.d.engine.openConfirmation(res.request!, false);
+      this.d.engine.approve(cid);
+    }
+    const closed = this.d.close?.(app);
+    if (closed && typeof (closed as Promise<number>).then === "function") {
+      void (closed as Promise<number>).then((n) => {
+        this.d.notify?.(n > 0
+          ? `Le pedí a ${app.name} que se cierre. Si tenía algo sin guardar, te pregunta ahí mismo.`
+          : `No veo ${app.name} abierta (o no pude cerrarla sin forzarla). No la fuerzo: ciérrala tú si hace falta.`);
+      });
+    }
+    this.journal.add("approval", `Cerré ${app.name}`);
+    if (this.activeApp === app.id) this.activeApp = undefined;
+    return { text: `Cerrando ${app.name}…` };
+  }
+
+  // ── Manejar programas por dentro ──────────────────────────────────────────
+
+  /**
+   * "Guarda", "en Illustrator crea contornos", "haz clic en Archivo", "escribe: hola",
+   * "aprende Word". Solo en programas con permiso; lo delicado se confirma antes.
+   */
+  private appControl(text: string, t: string): LocalReply | null {
+    const apps = this.d.apps;
+    if (!apps) return null;
+    // Respuesta al "¿lo hago?" de algo delicado
+    if (this.pendingDelicate) {
+      const p = this.pendingDelicate;
+      if (/^(si|dale|hazlo|confirmo|adelante|ok)$/.test(t)) {
+        this.pendingDelicate = null;
+        const app = apps.app(p.appId);
+        return app ? this.exec(app, p) : null;
+      }
+      if (/^(no|cancela|mejor no|no lo hagas)$/.test(t)) { this.pendingDelicate = null; return { text: "Entendido, no lo hice." }; }
+    }
+
+    // El ayudante de pantalla: su «¿lo hago?», su freno y el permiso para mirar
+    const agent = this.d.agent;
+    if (agent?.waiting()) {
+      if (/^(si|dale|hazlo|confirmo|adelante|ok)$/.test(t)) { agent.answer(true); return { text: "Sigo." }; }
+      if (/^(no|cancela|mejor no|no lo hagas|para)$/.test(t)) { agent.answer(false); return { text: "Entendido, no lo hago." }; }
+    }
+    if (agent?.busy() && /^(para|detente|basta|alto|cancela la tarea|deja eso|stop)$/.test(t)) { agent.halt(); return { text: "Me detengo." }; }
+    if (this.pendingScreen) {
+      const p = this.pendingScreen;
+      if (/^(si|dale|claro|ok|acepto|de una)$/.test(t)) {
+        this.pendingScreen = null;
+        this.screenConsent = true;
+        const app = apps.app(p.appId);
+        return app ? this.request(app, p) : null;
+      }
+      if (/^(no|cancela|mejor no)$/.test(t)) { this.pendingScreen = null; return { text: "Está bien, no miro la pantalla. Puedo seguir usando atajos y botones por su nombre." }; }
+    }
+
+    let cmd = t.replace(/^(?:(?:hocki|oye|por favor)[\s,]+)+/, "").replace(/(?:\s+(?:por favor|hocki))+$/, "").trim();
+    let raw = text.replace(/^(?:(?:hocki|oye|por favor)[\s,]+)+/i, "").trim();
+    // ¿Nombró el programa? ("en Illustrator, …", "… en Word")
+    let app: AppDef | null = null;
+    const named = matchApp(cmd, apps.list());
+    if (named) {
+      for (const n of appNames(named).sort((x, y) => y.length - x.length)) {
+        const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`(^|\\s)(?:en|con|de|a) (?:el |la )?${esc}(?:[,:]|\\s|$)`);
+        if (re.test(cmd)) {
+          cmd = cmd.replace(re, " ").replace(/\s+/g, " ").trim();
+          raw = raw.replace(new RegExp(`(^|\\s)(?:en|con|de|a) (?:el |la )?${esc}[,:]?`, "i"), " ").replace(/\s+/g, " ").trim();
+          app = named;
+          break;
+        }
+      }
+    }
+    // Una tarea entera: Hocki mira la pantalla y la hace paso a paso
+    if (/^(continua|sigue|continua la tarea|sigue con la tarea)$/.test(cmd) && this.lastGoal) {
+      const la = apps.app(this.lastGoal.appId);
+      if (la) return this.startAgent(la, this.lastGoal.goal);
+    }
+    const am = raw.match(/^(?:h[aá]zlo t[uú]|t[uú] hazlo|enc[aá]rgate(?: de)?|haz por m[ií]|hazme el favor de|automatiza|haz la tarea)\s*:?\s+([\s\S]+)$/i);
+    if (am) {
+      if (!app && !this.activeApp) return { text: "¿En qué programa lo hago? Dime por ejemplo «en Illustrator, hazlo tú: exporta el logo en PNG»." };
+      const target = app ?? apps.app(this.activeApp!) ?? null;
+      if (target) return this.startAgent(target, am[1].trim());
+    }
+
+    // "aprende Word": el programa va justo detrás del verbo
+    const lm = cmd.match(/^(aprende|estudia|explora|conoce|aprendete)(?: a usar)? (.+)$/);
+    if (lm && !app && named && appNames(named).includes(lm[2].replace(/^(el|la) /, ""))) { app = named; cmd = lm[1]; }
+    // Lo que sabe hacer en un programa
+    if (app && /^(?:que (?:sabes|puedes) hacer|atajos|que atajos sabes)$/.test(cmd)) return { text: this.skillsHelp(app) };
+    if (!app && this.activeApp) app = apps.app(this.activeApp) ?? null;
+
+    // Aprender un programa (leer sus botones y menús)
+    if (/^(?:aprende|estudia|explora|conoce|aprendete)(?: (?:a usar|este programa|esta app|el programa|la app))?$/.test(cmd) || /^que botones (?:hay|tiene)/.test(cmd)) {
+      if (!app) return { text: "¿Qué programa aprendo? Dime por ejemplo «aprende Word» con el programa abierto." };
+      return this.request(app, { appId: app.id, action: "list", arg: "", label: "aprender sus botones y menús" });
+    }
+    // Escribir texto
+    let m = raw.match(/^(?:escribe|escribir|teclea|tipea)\s*:?\s+([\s\S]+)$/i);
+    if (m) {
+      if (!app) return { text: "¿En qué programa escribo? Dime por ejemplo «en Word escribe: hola»." };
+      return this.request(app, { appId: app.id, action: "type", arg: sendKeysText(m[1].trim()), label: `escribir «${m[1].trim().slice(0, 40)}»` });
+    }
+    // Pulsar un botón o menú por su nombre
+    m = raw.match(/^(?:haz cli(?:c|ck)|da(?:le)? cli(?:c|ck)|cli(?:c|ck)|pulsa|presiona|oprime|toca)\s+(?:en\s+)?(?:el |la |los |las )?(?:bot[oó]n |men[uú] |opci[oó]n |pesta[nñ]a )?(.+)$/i);
+    if (m) {
+      if (!app) return { text: "¿En qué programa? Dime por ejemplo «en Word haz clic en Insertar»." };
+      const name = m[1].replace(/[.!¡¿?"«»]/g, "").trim();
+      if (!name) return null;
+      const delicate = /\b(eliminar|borrar|suprimir|enviar|publicar|compartir|pagar|comprar|reemplazar|sobrescribir|vaciar|formatear)\b/i.test(normalize(name));
+      const p: PendingAct = { appId: app.id, action: "click", arg: name, label: `pulsar «${name}»` };
+      return delicate ? this.askDelicate(app, p) : this.request(app, p);
+    }
+    // Un atajo conocido de ese programa
+    if (!app) return null;
+    const skill = cmd.split(" ").length <= 6 ? matchSkill(cmd, skillsFor(app.id)) : null;
+    if (!skill) {
+      // "En Illustrator, cambia el fondo a azul": con el programa nombrado, una orden larga es una tarea.
+      const explicit = named && app.id === named.id;
+      const question = /^(como|que|cual|cuales|por que|donde|cuando|quien|sabes|puedes)\b/.test(cmd) || /\?\s*$/.test(text);
+      if (explicit && this.d.agent && !question && cmd.split(" ").length >= 3) return this.startAgent(app, raw);
+      return null;
+    }
+    const p: PendingAct = { appId: app.id, action: "keys", arg: skill.keys, label: skill.label };
+    return skill.delicate ? this.askDelicate(app, p) : this.request(app, p);
+  }
+
+  // ── Lo que tienes instalado ───────────────────────────────────────────────
+
+  private inventoryRoute(text: string, t: string): LocalReply | null {
+    if (!this.d.scan) return null;
+    if (this.pendingScan) {
+      if (/^(si|dale|claro|ok|de una|acepto|hazlo|listo)$/.test(t)) {
+        this.pendingScan = false;
+        this.inventoryConsent = true;
+        void this.runScan(true);
+        return { text: "Perfecto, estoy revisando tu equipo…" };
+      }
+      if (/^(no|luego|ahora no|despues|no gracias)$/.test(t)) {
+        this.pendingScan = false;
+        return { text: "Está bien. Cuando quieras dime «estudia mi equipo»." };
+      }
+    }
+    if (/\b(estudia|revisa|escanea|aprende|analiza|conoce)\b.*\b(mi equipo|mi computador|mi pc|mi computadora|mis programas|mis apps|mis aplicaciones|lo que tengo instalado)\b/.test(t)) {
+      if (!this.inventoryConsent) { this.pendingScan = true; return { text: SCAN_OFFER }; }
+      void this.runScan(true);
+      return { text: "Vuelvo a revisar tu equipo…" };
+    }
+    if (/\bque (programas|apps|aplicaciones) (tengo|hay|tienes)\b|\bmis programas instalados\b/.test(t)) {
+      if (!this.inventory) { this.pendingScan = !this.inventoryConsent; return { text: this.inventoryConsent ? "Aún no termino de revisar tu equipo." : SCAN_OFFER }; }
+      return { text: summarize(this.inventory) };
+    }
+    const m = text.match(/^(?:¿)?\s*(?:tengo|tienes|hay)\s+(?:instalad[oa]\s+)?(?:el |la |un |una )?(.+?)(?:\s+instalad[oa])?\s*\??$/i);
+    if (m && this.inventory && m[1].split(/\s+/).length <= 3 && /\?|instalad/i.test(text) && !/^(que|una? (reunion|cita|pregunta|duda)|tiempo|hambre|sueno|frio|calor)/.test(normalize(m[1]))) {
+      const found = findInstalled(this.inventory, m[1]);
+      return { text: found ? `Sí, tienes ${found.name}. Dime «abre ${found.name}» cuando quieras.` : `No veo «${m[1]}» en tu equipo. Si lo instalaste hace poco, dime «estudia mi equipo».` };
+    }
+    return null;
+  }
+
+  private async runScan(tell: boolean): Promise<void> {
+    if (this.scanning || !this.d.scan) return;
+    this.scanning = true;
+    try {
+      const list = await this.d.scan();
+      if (!list?.length) { if (tell) this.d.notify?.("No pude leer la lista de programas de este equipo (por ahora solo en Windows)."); return; }
+      this.inventory = { at: this.now(), apps: list.slice(0, 800) };
+      const added = this.d.apps ? ingest(this.inventory, this.d.apps, this.appIds) : 0;
+      this.journal.add("system", `Revisé el equipo: ${list.length} programas`);
+      this.save();
+      if (tell) this.d.notify?.(`${summarize(this.inventory)}\n\nYa puedo abrir, cerrar y ayudarte con cualquiera${added ? ` (aprendí ${added} que no conocía)` : ""}. La primera vez que actúe en uno te pido permiso. Prueba «abre …», «en … hazlo tú: …» o «qué sabes hacer en …».`);
+    } finally {
+      this.scanning = false;
+    }
+  }
+
+  /** Quien ya terminó la bienvenida antes de esta versión: la oferta de estudiar el equipo, una vez. */
+  scanOfferOnce(): string | null {
+    if (this.onboard !== "done" || this.inventoryConsent || this.scanOffered || !this.d.scan) return null;
+    this.scanOffered = true;
+    this.pendingScan = true;
+    this.save();
+    return SCAN_OFFER;
+  }
+
+  /** El AppID con que Windows abre ese programa (si lo vio al estudiar el equipo). */
+  appIdOf(id: string): string | undefined { return this.appIds.get(id); }
+
+  /** Pide permiso para mirar la pantalla (una vez) y para el programa (una vez), y arranca. */
+  private startAgent(app: AppDef, goal: string): LocalReply {
+    if (!this.d.agent) return { text: "Ver la pantalla no está disponible aquí." };
+    const p: PendingAct = { appId: app.id, action: "agent", arg: goal.slice(0, 400), label: `tarea: ${goal.slice(0, 60)}` };
+    if (!this.screenConsent) {
+      this.pendingScreen = p;
+      const ai = this.d.aiName?.() ?? "la IA que elegiste";
+      return { text: `Para hacer tareas completas necesito mirar tu pantalla: tomo una captura en cada paso y se la envío a ${ai} (la IA que elegiste en Ajustes) para que decida qué hacer; luego la borro. Si usas un modelo local (Ollama, LM Studio) no sale de tu equipo; si es en la nube, sí viaja a ese servicio y puede costar créditos. Solo actúo dentro del programa que autorices y te pregunto antes de lo delicado. ¿Aceptas? «sí» o «no».` };
+    }
+    return this.request(app, p);
+  }
+
+  private skillsHelp(app: AppDef): string {
+    const sk = skillsFor(app.id).map((k) => k.label);
+    const learned = this.learned[app.id]?.length ? `\nAdemás aprendí ${this.learned[app.id].length} botones y menús: dime «haz clic en …».` : "\nDime «aprende " + app.name + "» con el programa abierto y leo sus botones y menús.";
+    return `En ${app.name} sé hacer: ${sk.join(", ")}.\nTambién: «escribe: …» y «haz clic en …».${learned}`;
+  }
+
+  /** Lo delicado (borrar, enviar, publicar) se pregunta siempre, aunque haya permiso. */
+  private askDelicate(app: AppDef, p: PendingAct): LocalReply {
+    if (!this.d.apps?.isGranted(app.id)) return this.request(app, p);
+    this.pendingDelicate = p;
+    return { text: `Eso es delicado (${p.label} en ${app.name}). ¿Lo hago? Responde «sí» o «no».` };
+  }
+
+  /** Pide el permiso (una sola vez por programa) o lo hace. */
+  private request(app: AppDef, p: PendingAct): LocalReply {
+    if (!this.d.apps!.isGranted(app.id)) {
+      this.pendingApp = app.id;
+      this.pendingAfter = "act";
+      this.pendingAct = p;
+      return { text: `Para manejar ${app.name} necesito tu permiso, una sola vez: abrirla, cerrarla y usarla cuando me lo pidas (antes de borrar, enviar o publicar te pregunto; pagos y contraseñas nunca). ¿Me lo das? Responde «sí» o «no».` };
+    }
+    return this.runAct(app, p);
+  }
+
+  private runAct(app: AppDef, p: PendingAct): LocalReply {
+    const res = this.d.apps!.use(app.id, p.label, "user", { resting: this.d.resting?.() ?? false });
+    const d = res.decision;
+    if (d.type === "deny") {
+      if (/detenido/.test(d.reason)) return { text: "Estoy detenido. Escribe «reactívate» para volver." };
+      return { text: `No puedo hacerlo en ${app.name}: ${d.reason}.` };
+    }
+    if (d.type === "suggest_only") return { text: `Estoy en modo sugerir: hazlo tú (${p.label}). Escribe «modo confirmar» si quieres que lo haga yo.` };
+    if (d.type === "ask") {
+      if (d.needsBiometric) return { text: `${app.name} es sensible (dinero o claves): ahí no actúo.` };
+      const cid = this.d.engine.openConfirmation(res.request!, false);
+      this.d.engine.approve(cid);
+    }
+    return this.exec(app, p);
+  }
+
+  private exec(app: AppDef, p: PendingAct): LocalReply {
+    this.activeApp = app.id;
+    this.journal.add("approval", `${app.name}: ${p.label}`);
+    if (p.action === "agent") {
+      const agent = this.d.agent;
+      if (!agent) return { text: "Ver la pantalla no está disponible aquí." };
+      this.lastGoal = { appId: app.id, goal: p.arg };
+      const ok = agent.start(app, p.arg, this.learned[app.id] ?? [], (r) => {
+        this.journal.add("approval", `${app.name}: tarea ${r.status} (${r.steps} pasos)`);
+        this.save();
+        this.d.notify?.(r.message);
+      });
+      if (!ok) return { text: "Ya estoy haciendo otra tarea. Dime «para» si quieres que la deje." };
+      return { text: `Voy con eso en ${app.name}: miro la pantalla y lo hago paso a paso (máximo 15). Di «para» o «Hocki fuera» para detenerme.` };
+    }
+    const out = this.d.act?.(app, p.action as AppAction, p.arg);
+    if (out && typeof (out as Promise<string[]>).then === "function") {
+      void (out as Promise<string[]>).then((lines) => this.afterAct(app, p, lines ?? []));
+    }
+    if (p.action === "list") return { text: `Estoy leyendo los botones y menús de ${app.name}…` };
+    if (p.action === "click") return { text: `Busco «${p.arg}» en ${app.name}…` };
+    return { text: `Listo: ${p.label} en ${app.name}.` };
+  }
+
+  private afterAct(app: AppDef, p: PendingAct, lines: string[]) {
+    const err = lines.find((l) => l.startsWith("ERR:"))?.slice(4);
+    const say = (x: string) => this.d.notify?.(x);
+    if (err === "not-running") return say(`${app.name} no está abierta. Dime «abre ${app.name}» y lo intento de nuevo.`);
+    if (err === "unsupported") return say("Manejar programas por dentro solo está disponible en Windows por ahora.");
+    if (err === "not-found") {
+      const known = this.learned[app.id]?.filter((n) => normalize(n).includes(normalize(p.arg).split(" ")[0])).slice(0, 5) ?? [];
+      return say(`No encontré «${p.arg}» en ${app.name}.${known.length ? ` ¿Quisiste decir: ${known.join(", ")}?` : " Dime «aprende " + app.name + "» y te digo qué botones veo."}`);
+    }
+    if (err === "no-action") return say(`Encontré «${p.arg}», pero no se deja pulsar desde la accesibilidad de Windows. Prueba con su atajo de teclado.`);
+    if (err) return say(`No pude hacerlo en ${app.name}.`);
+    if (p.action === "list") {
+      const names = lines.filter((l) => l.startsWith("N:")).map((l) => l.slice(2)).slice(0, 200);
+      if (!names.length) return say(`${app.name} no me muestra sus botones (algunos programas, como varios de Adobe, los ocultan a la accesibilidad). Igual puedo usar sus atajos: dime «qué sabes hacer en ${app.name}».`);
+      this.learned[app.id] = names;
+      const keys = Object.keys(this.learned);
+      if (keys.length > 40) delete this.learned[keys[0]];
+      this.save();
+      return say(`Aprendí ${names.length} botones y menús de ${app.name}, por ejemplo: ${names.slice(0, 12).join(", ")}. Dime «haz clic en …» cuando quieras.`);
+    }
+    if (p.action === "click") {
+      const done = lines.find((l) => l.startsWith("OK:"))?.slice(3);
+      return say(`Pulsé «${done ?? p.arg}» en ${app.name}.`);
+    }
+  }
+
+  /** Un programa instalado que no está en el catálogo: se busca en el menú Inicio por su nombre. */
+  private customApp(raw: string): AppDef | null {
+    const apps = this.d.apps;
+    if (!apps || apps.mode !== "any") return null;
+    const name = cleanProgramName(raw.replace(/^(?:(?:el|la|los|las|mi|un|una|programa|aplicacion|app|de|del)\s+)+/, ""));
+    if (!name) return null;
+    // ¿Es uno de los que tienes instalados? Entonces se usa su nombre real.
+    const inst = findInstalled(this.inventory, name);
+    if (inst) {
+      const known = apps.list().find((a) => a.name === inst.name);
+      if (known) return known;
+    }
+    const id = "x-" + name.replace(/[^a-z0-9]+/g, "-");
+    const shown = name.replace(/\b\w/g, (c) => c.toUpperCase());
+    apps.addCustom({ id, name: shown, launch: {}, find: name.split(" ") });
+    return apps.app(id) ?? null;
   }
 
   // ── Para el asistente de IA ────────────────────────────────────────────────
@@ -493,6 +936,7 @@ export class HockiBrain {
 
   /** Llamar cada segundo: ejecuta lo que toca y devuelve lo nuevo para mostrar. */
   tick(): OutboxItem[] {
+    if (this.inventoryConsent && this.d.scan && !this.scanning && (!this.inventory || this.now() - this.inventory.at > 7 * 86_400_000)) void this.runScan(false);
     const ran = this.jobs.tick();
     const fresh = this.jobs.unread();
     if (ran > 0) this.save();
@@ -500,7 +944,7 @@ export class HockiBrain {
   }
 
   /** "Hocki fuera": todo se detiene. */
-  stopAll() { this.jobs.pauseAll(); this.d.engine.kill("Detenido por la persona"); this.save(); }
+  stopAll() { this.d.agent?.halt(); this.jobs.pauseAll(); this.d.engine.kill("Detenido por la persona"); this.save(); }
   /** La persona vuelve a darle vía libre. */
   resumeAll() {
     this.d.engine.resume();

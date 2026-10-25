@@ -242,6 +242,25 @@ pub async fn send_for_phone(
     Err(format!("Unknown chat provider: {provider}"))
 }
 
+/// One step of the screen helper (screen_agent.rs): a fresh conversation with the provider the
+/// user chose, a screenshot from the inbox riding along, and nothing streamed into the island.
+pub async fn send_agent(settings: &Settings, query: String, context: ChatContext) -> Result<ChatReply, String> {
+    let context = checked_context(context)?;
+    let chat = Chat::default();
+    let provider = settings.chat_provider.as_str();
+    let model = model_for(settings, provider);
+    if provider == ANTHROPIC || provider.is_empty() {
+        return claude::send(&chat, &model, query, Some(context)).await;
+    }
+    if let Some(p) = openai_compat::provider(provider) {
+        return openai_compat::send(&chat, p, &model, query, Some(context)).await;
+    }
+    if let Some(server) = local_chat::server(settings, provider) {
+        return local_chat::send_with(&chat, &server, &model, query, Some(context), |_| {}).await;
+    }
+    Err(format!("Unknown chat provider: {provider}"))
+}
+
 /// The models `provider` offers. Asked only when the user opens the picker on
 /// that provider, and only once it has a key (or, for a local server, an
 /// address): nothing is sent anywhere before that.

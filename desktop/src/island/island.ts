@@ -18,7 +18,7 @@ import { SPOTIFY_ID, islandDances } from "../core/spotify";
 import { newHockiEngine } from "../hocki/engine";
 import { Greeting } from "../hocki/greeting";
 import { createMiniBot, pruneMiniBots, setMiniCursor, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
-import { Speaker, browserBackend, voicePrefs, spanishVoiceNames, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
+import { Speaker, browserBackend, nativeBackend, voicePrefs, spanishVoiceNames, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
 import { professionById } from "../hocki/professions";
 import { browserKV } from "../hocki/storage";
 import { parseVoice, stripName } from "../hocki/voice-commands";
@@ -33,6 +33,8 @@ import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 import { refreshHookPills } from "./integrations";
 import { DesktopLink } from "./desktop";
+import { VoiceIdentity, printOf } from "../hocki/voice-id";
+import { MicCapture, micErrorText } from "../hocki/voice-capture";
 import type { ViewCommand } from "./shortcuts";
 import { DRAG_THRESHOLD } from "../hocki/desktop-logic";
 
@@ -81,7 +83,11 @@ export class Island {
 
   private engine = newHockiEngine();
   private greeting = new Greeting();
-  private speaker = new Speaker(browserBackend() ?? { speak() {}, cancel() {} });
+  private speaker = new Speaker(
+    IS_TAURI && navigator.userAgent.includes("Windows")
+      ? nativeBackend({ speak: (t, v) => Bridge.voiceSpeak(t, v), stop: () => void Bridge.voiceSpeakStop() }, browserBackend())
+      : (browserBackend() ?? { speak() {}, cancel() {} }),
+  );
   private voice = new VoiceService({
     // En Windows se usa el reconocedor del propio sistema (sin internet); en otros, el del navegador.
     factory: IS_TAURI && navigator.userAgent.includes("Windows")
@@ -105,6 +111,10 @@ export class Island {
   private kv = browserKV();
   private chatterAt = Date.now();
   private lastEcho = 0;
+  private voiceId = VoiceIdentity.from(browserKV().get("hocki.voiceid"));
+  private capture = new MicCapture();
+  private enrolling = false;
+  private mutedUntil = 0;
   private greetingShown = false;
   private seasons = new SeasonCache();
 
@@ -158,6 +168,15 @@ export class Island {
     this.engine.onDizzy = () => this.handleDizzy();
     // Segundo plano: cada segundo revisa si toca algún recordatorio o rutina.
     setInterval(() => this.backgroundTick(), 1000);
+    // Con el micrófono encendido, Hocki también dice en voz alta lo que responde por escrito.
+    window.addEventListener("hocki-speak", (e) => {
+      const text = String((e as CustomEvent<string>).detail ?? "");
+      if (text && this.voice.on) this.say(speakable(text));
+    });
+    window.addEventListener("hocki-say", (e) => {
+      const text = String((e as CustomEvent<string>).detail ?? "");
+      if (text) { this.pushChat("", text); this.say(text); }
+    });
     window.addEventListener("hocki-action", (e) => this.doAction((e as CustomEvent<HockiAction>).detail));
     // Si la persona pidió que lo escuche siempre, vuelve a encender el micrófono al arrancar.
     { const n = Number(this.kv.get("hocki.voice")); voicePrefs.index = Number.isInteger(n) && n >= 0 && this.kv.get("hocki.voice") !== null ? n : -1; }
@@ -170,6 +189,10 @@ export class Island {
       brain.journal.add("system", "Bienvenida");
       brain.save();
       State.chatHistory.push({ id: Date.now(), role: "assistant", content: `¡Hola, soy Hocki!\n${HELP_TEXT}` });
+    }
+    {
+      const offer = brain.scanOfferOnce();
+      if (offer) State.chatHistory.push({ id: Date.now() + 1, role: "assistant", content: offer });
     }
     this.greeting.onComplete = () => {
       this.fsm.greetComplete();
@@ -493,6 +516,7 @@ export class Island {
       return;
     }
     if (this.voice.start()) {
+      if (this.voiceId.gate) void this.startCapture();
       this.speaker.resume();
       this.speaker.settings.enabled = true;
     }
@@ -501,6 +525,7 @@ export class Island {
   /** Lo que se oyó: solo reacciona si le hablan a Hocki (o si le dicen que pare). */
   private onVoiceHeard(text: string) {
     const cmd = parseVoice(text);
+    if (Date.now() < this.mutedUntil && cmd.intent !== "stop") return; // es la voz del propio Hocki
     if (!cmd.addressed && cmd.intent !== "stop") {
       // Que se note que el micrófono sí oye: si no era una orden, lo decimos (como mucho cada 40 s).
       if (text.trim() && Date.now() - this.lastEcho > 40_000) {
@@ -510,6 +535,8 @@ export class Island {
       }
       return;
     }
+    if (this.enrolling) return; // estamos grabando tus frases: no son órdenes
+    if (this.voiceId.gate && cmd.intent !== "stop" && !this.voiceMatches()) return;
     const spoken = stripName(text);
     // 1) Lo que Hocki resuelve solo: recordar, programar, listar, cambiar de oficio…
     const local = cmd.intent === "unknown" && spoken ? brain.handle(spoken) : null;
@@ -556,7 +583,8 @@ export class Island {
   }
 
   private say(text: string) {
-    this.speaker.say(text, { busy: false });
+    // Mientras Hocki habla (y un instante después) no se oye a sí mismo por el micrófono.
+    if (this.speaker.say(text, { busy: false })) this.mutedUntil = Date.now() + 900 + text.length * 75;
   }
 
   private pushChat(user: string, answer: string) {
@@ -618,23 +646,44 @@ export class Island {
       case "home":
         this.desktop.walkHome();
         break;
+      case "voice_enroll":
+        void this.enrollVoice();
+        break;
+      case "voice_forget":
+        this.voiceId.forget();
+        this.saveVoiceId();
+        this.capture.stop();
+        break;
+      case "voice_gate_on":
+        if (!this.voiceId.enrolled) { this.pushChat("", "Primero necesito aprender tu voz: dime «registra mi voz»."); break; }
+        this.voiceId.gate = true;
+        this.saveVoiceId();
+        if (this.voice.on) void this.startCapture();
+        break;
+      case "voice_gate_off":
+        this.voiceId.gate = false;
+        this.saveVoiceId();
+        break;
       case "voice_test":
         this.speaker.resume();
         this.speaker.settings.enabled = true;
         this.say("¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?");
         break;
       case "voice_next": {
-        const names = spanishVoiceNames();
-        if (!names.length) {
-          this.pushChat("", "No encuentro voces en español en este equipo. Instálalas en Windows: Configuración → Hora e idioma → Voz → Agregar voces.");
-          break;
-        }
-        voicePrefs.index = (voicePrefs.index + 1) % names.length;
-        this.kv.set("hocki.voice", String(voicePrefs.index));
-        this.speaker.resume();
-        this.speaker.settings.enabled = true;
-        this.pushChat("", `Voz ${voicePrefs.index + 1} de ${names.length}: ${names[voicePrefs.index]}. Di «cambia de voz» para oír la siguiente.`);
-        this.say("¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?");
+        void (async () => {
+          const native = IS_TAURI && navigator.userAgent.includes("Windows") ? await Bridge.voiceList() : null;
+          const names = native && native.length ? native : spanishVoiceNames();
+          if (!names.length) {
+            this.pushChat("", "No encuentro voces en español en este equipo. Instálalas en Windows: Configuración → Hora e idioma → Voz → Agregar voces.");
+            return;
+          }
+          voicePrefs.index = (voicePrefs.index + 1) % names.length;
+          this.kv.set("hocki.voice", String(voicePrefs.index));
+          this.speaker.resume();
+          this.speaker.settings.enabled = true;
+          this.pushChat("", `Voz ${voicePrefs.index + 1} de ${names.length}: ${names[voicePrefs.index]}. Di «cambia de voz» para oír la siguiente.`);
+          this.say("¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?");
+        })();
         break;
       }
       case "listen_on":
@@ -645,6 +694,83 @@ export class Island {
         this.kv.set("hocki.listen", "off");
         if (this.voice.on) this.toggleVoice();
         break;
+    }
+  }
+
+  private saveVoiceId() { this.kv.set("hocki.voiceid", this.voiceId.export()); }
+
+  /** Enciende el micrófono de la huella; si Windows lo niega, lo dice y se apaga el filtro de voz. */
+  private async startCapture(): Promise<boolean> {
+    const err = await this.capture.start();
+    if (err) {
+      this.voiceId.gate = false;
+      this.pushChat("", micErrorText(err));
+      return false;
+    }
+    return true;
+  }
+
+  /** ¿Lo último que se oyó suena a la persona registrada? Si no hay forma de saberlo, no estorba. */
+  private voiceMatches(): boolean {
+    if (!this.capture.running) return true;
+    const r = this.voiceId.check(this.capture.recent(3.5), this.capture.sampleRate);
+    if (!r.enough || r.ok) return true; // sin voz clara no se decide: mejor no ignorarte por un fallo
+    if (Date.now() - this.lastEcho > 40_000) {
+      this.lastEcho = Date.now();
+      this.pushChat("", `No reconocí tu voz (me parecí ${Math.round(r.score * 100)}%, necesito ${Math.round(this.voiceId.limit * 100)}%). Repite más cerca del micrófono, o dime «obedece a cualquiera».`);
+    }
+    return false;
+  }
+
+  /** Permiso del micrófono + frases de prueba → huella de voz + comprobación final. */
+  private async enrollVoice() {
+    if (this.enrolling) return;
+    this.enrolling = true;
+    this.speaker.resume();
+    this.speaker.settings.enabled = true;
+    try {
+      if (!(await this.startCapture())) return;
+      const phrases = [
+        "Hola Hocki, soy yo, tu compañero de trabajo",
+        "Hocki, ábrete y dime qué tengo para hoy",
+        "Hocki, quédate quieto un momento",
+        "Hocki, vuelve a la isla cuando termine",
+      ];
+      const prints: number[][] = [];
+      for (let i = 0; i < phrases.length; i++) {
+        let ok = false;
+        for (let tries = 0; tries < 3 && !ok; tries++) {
+          const msg = `Frase ${i + 1} de ${phrases.length}: di «${phrases[i]}». Te escucho 5 segundos, empieza ya.`;
+          this.pushChat("", msg);
+          this.say(`Frase ${i + 1}. Di: ${phrases[i]}`);
+          await new Promise((r) => setTimeout(r, 2800)); // que termine de hablar antes de grabar
+          const rec = await this.capture.record(5000);
+          const p = printOf(rec, this.capture.sampleRate);
+          if (p) { prints.push(p); ok = true; } else this.pushChat("", "Casi no te oí. Acércate al micrófono y vamos otra vez.");
+        }
+        if (!ok) { this.pushChat("", "No logré oír tu voz. Revisa que el micrófono funcione y dime «registra mi voz» de nuevo."); return; }
+      }
+      if (!this.voiceId.enroll(prints)) { this.pushChat("", "No pude guardar tu voz. Inténtalo otra vez."); return; }
+      this.saveVoiceId();
+      // Prueba inicial: una frase más, ya con la huella guardada.
+      this.pushChat("", "¡Listo! Última prueba: di «Hocki, ¿me reconoces?»");
+      this.say("Última prueba. Di: Hocki, ¿me reconoces?");
+      await new Promise((r) => setTimeout(r, 3000));
+      const test = this.voiceId.check(await this.capture.record(4500), this.capture.sampleRate);
+      const pct = Math.round(test.score * 100);
+      if (test.ok) {
+        const m = `Te reconozco (${pct}%). Desde ahora solo obedezco a tu voz. Dime «obedece a cualquiera» si prefieres lo contrario, o «borra mi voz».`;
+        this.pushChat("", m); this.say("Te reconozco. Desde ahora solo obedezco a tu voz.");
+      } else {
+        this.voiceId.gate = false; this.saveVoiceId();
+        const m = test.enough
+          ? `Guardé tu voz, pero en la prueba solo llegué a ${pct}% (necesito ${Math.round(this.voiceId.limit * 100)}%). Por ahora te obedezco a ti y a cualquiera; di «registra mi voz» en un lugar más silencioso para intentarlo otra vez.`
+          : "Guardé tu voz, pero en la prueba no te oí bien. Por ahora te obedezco a cualquiera; repite «registra mi voz» en un lugar más silencioso.";
+        this.pushChat("", m); this.say("Guardé tu voz, pero no estoy seguro de reconocerte. Probemos de nuevo más tarde.");
+      }
+    } finally {
+      this.enrolling = false;
+      if (!this.voice.on && !this.voiceId.gate) this.capture.stop();
     }
   }
 

@@ -31,6 +31,9 @@ mod shortcuts;
 mod sounds;
 mod spotify;
 mod tray;
+mod app_control;
+mod screen_agent;
+mod tts_native;
 mod voice_native;
 #[cfg(windows)]
 mod webview_drop;
@@ -220,6 +223,21 @@ fn launch_app(keywords: Vec<String>) -> bool {
         return false;
     }
     platform::launch_shortcut(&keywords)
+}
+
+/// Pide a un programa que cierre sus ventanas (sin forzar). Cuántas ventanas se cerraron.
+#[tauri::command]
+fn close_app(keywords: Vec<String>) -> usize {
+    let clean = !keywords.is_empty()
+        && keywords.len() <= 4
+        && keywords.iter().all(|k| {
+            (2..=40).contains(&k.chars().count())
+                && k.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '.' || c == '-' || c == '+')
+        });
+    if !clean {
+        return 0;
+    }
+    platform::close_app(&keywords)
 }
 
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
@@ -707,6 +725,17 @@ pub fn run() {
             list_monitors,
             open_url,
             launch_app,
+            close_app,
+            app_control::app_act,
+            app_control::scan_installed,
+            app_control::launch_app_id,
+            screen_agent::agent_snapshot,
+            screen_agent::agent_think,
+            screen_agent::agent_forget,
+            screen_agent::agent_input,
+            tts_native::voice_speak,
+            tts_native::voice_speak_stop,
+            tts_native::voice_list,
             voice_native::voice_native_start,
             voice_native::voice_native_stop,
             open_in_vscode,

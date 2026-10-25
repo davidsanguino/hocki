@@ -19,6 +19,8 @@ export interface AppDef {
   launch: Partial<Record<OS, string>>;
   /** Palabras del nombre del acceso directo del menú Inicio (escritorio): así se encuentra la app instalada. */
   find?: string[];
+  /** Nombre(s) del proceso en el sistema, para pedirle que cierre. Si falta se deduce de `find`. */
+  proc?: string[];
   /** Otras formas de nombrarla al hablar ("ps", "ppt"…). */
   aliases?: string[];
   sensitive?: boolean;
@@ -120,6 +122,34 @@ export type AppMode = "catalog" | "any";
 
 export interface AppResult { decision: Decision; request: ActionRequest | null }
 
+/** Nombres de proceso que no se deducen del nombre del acceso directo. */
+const PROC: Record<string, string[]> = {
+  word: ["winword"], powerpoint: ["powerpnt"], correo: ["outlook"], calendario: ["outlook"],
+  access: ["msaccess"], publisher: ["mspub"], teams: ["ms-teams", "teams"], "3dsmax": ["3dsmax"],
+  autocad: ["acad"], aftereffects: ["afterfx"], davinci: ["resolve"], obs: ["obs64", "obs32"],
+  vscode: ["code"], notas: ["notepad"], calculadora: ["calculatorapp", "calculator"], premiere: ["premiere"],
+  mediaencoder: ["adobe media encoder"], fusion360: ["fusion360"], cinema4d: ["cinema 4d"],
+};
+
+/** Con qué palabras buscar el proceso de una app para cerrarla (solo el nombre del proceso). */
+export function procKeys(app: AppDef): string[] {
+  if (app.proc?.length) return app.proc;
+  if (PROC[app.id]) return PROC[app.id];
+  // Programa propio: su palabra más larga (otra suelta podría coincidir con otro programa).
+  if (app.custom && app.find?.length) return [[...app.find].map(plain).sort((a, b) => b.length - a.length)[0]];
+  return (app.find ?? [app.name]).map((f) => plain(f)).filter((f) => f.length >= 2);
+}
+
+/** Programas que Hocki nunca abre ni cierra, aunque se los pidas: pueden ejecutar cualquier cosa. */
+const NEVER = /\b(powershell|cmd|terminal|consola|regedit|registro|bash|wsl|shell|simbolo del sistema|administrador de tareas|task manager|diskpart|gpedit|msconfig)\b/;
+
+/** Un nombre que se puede usar para buscar un programa instalado (2–40 letras, hasta 4 palabras). */
+export function cleanProgramName(raw: string): string | null {
+  const n = plain(raw).replace(/[^a-z0-9 .+-]/g, " ").replace(/\s+/g, " ").trim();
+  if (n.length < 2 || n.length > 40 || n.split(" ").length > 4 || NEVER.test(n)) return null;
+  return n;
+}
+
 export class AppAutomation {
   mode: AppMode = "catalog";
   private engine: PermissionEngine;
@@ -137,10 +167,10 @@ export class AppAutomation {
   // ── Catálogo ───────────────────────────────────────────────────────────────
 
   /** Registra una app propia (cualquier app del equipo, en modo "any"). */
-  addCustom(def: { id: string; name: string; launch: Partial<Record<OS, string>>; sensitive?: boolean }): boolean {
+  addCustom(def: { id: string; name: string; launch: Partial<Record<OS, string>>; find?: string[]; sensitive?: boolean }): boolean {
     if (this.mode !== "any" || this.apps.has(def.id)) return false;
     this.apps.set(def.id, {
-      id: def.id, name: def.name, category: "personalizada", launch: def.launch,
+      id: def.id, name: def.name, category: "personalizada", launch: def.launch, ...(def.find ? { find: def.find } : {}),
       sensitive: def.sensitive || looksSensitive(def.name), custom: true,
     });
     return true;
@@ -180,6 +210,24 @@ export class AppAutomation {
     const desktop = this.os === "windows" || this.os === "macos" || this.os === "linux";
     if (!this.launchTarget(appId) && !(desktop && app!.find)) return deny("Esa app no tiene forma de abrirse en este sistema");
     const request: ActionRequest = { kind: "open_app", summary: `Abrir ${app!.name}`, fingerprint: `open:${appId}`, origin };
+    return this.finish(request, app!, ctx);
+  }
+
+  /** Cerrar una app (con cortesía: ella misma pregunta si hay algo sin guardar). */
+  close(appId: string, origin: Origin, ctx: Context): AppResult {
+    const app = this.apps.get(appId);
+    const gate = this.gate(app);
+    if (gate) return gate;
+    const request: ActionRequest = { kind: "open_app", summary: `Cerrar ${app!.name}`, fingerprint: `close:${appId}`, origin };
+    return this.finish(request, app!, ctx);
+  }
+
+  /** Manejar una app por dentro (atajos, texto, botones), con el mismo permiso por app. */
+  use(appId: string, what: string, origin: Origin, ctx: Context): AppResult {
+    const app = this.apps.get(appId);
+    const gate = this.gate(app);
+    if (gate) return gate;
+    const request: ActionRequest = { kind: "open_app", summary: `${app!.name}: ${what}`, fingerprint: `use:${appId}:${what}`, origin };
     return this.finish(request, app!, ctx);
   }
 

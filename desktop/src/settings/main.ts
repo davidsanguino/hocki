@@ -2,6 +2,7 @@
 // Stage 2 covers the Claude Code hooks and the general preferences; API keys and
 // integrations land here too in a later stage.
 
+import { LEGAL_NOTICE, PRIVACY_NOTICE } from "../hocki/notices";
 import "./settings.css";
 import { Bridge, onEvent, type HookPreview, type HookStatus, type ShortcutsReport } from "../core/bridge";
 import { CUSTOM_SERVER_KEY, providerDef, urlExposure } from "../core/providers";
@@ -875,6 +876,17 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
 
 // ── General section ───────────────────────────────────────────────────────────
 
+/** Qué hace Hocki con tus programas y tu voz, y hasta dónde llega (se muestra también en el chat). */
+function privacySection(): HTMLElement {
+  const block = (text: string) => h("div", { class: "hint", style: "white-space:pre-wrap;line-height:1.5", text });
+  return h(
+    "section",
+    {},
+    h("h2", {}, h("span", { text: "Privacidad y aviso legal" })),
+    h("div", { style: "display:flex;flex-direction:column;gap:12px" }, block(PRIVACY_NOTICE), block(LEGAL_NOTICE)),
+  );
+}
+
 function generalSection(): HTMLElement {
   const volume = h("input", {
     type: "range", min: "0", max: "0.2", step: "0.005",
@@ -1372,6 +1384,7 @@ async function render() {
     integrationsSection(present),
     phoneSection(settings.phoneLink ?? false, toggle, settings),
     generalSection(),
+    privacySection(),
     shortcutsSection(shortcutReport),
     h("div", {
       class: "hint",

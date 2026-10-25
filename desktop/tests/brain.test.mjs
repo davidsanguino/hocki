@@ -383,9 +383,11 @@ const mkApps = (c = clock(), kv = new MemoryKV()) => {
   const engine = new PermissionEngine();
   const apps = new AppAutomation(engine, "windows");
   const launched = [];
-  const brain = HockiBrain.load({ engine, kv, now: c.now, apps, launch: (a) => launched.push(a.id) });
+  const closed = [];
+  const acts = [];
+  const brain = HockiBrain.load({ engine, kv, now: c.now, apps, launch: (a) => { launched.push(a.id); }, close: (a) => { closed.push(a.id); }, act: (a, action, arg) => { acts.push([a.id, action, arg]); } });
   brain.onboard = "done";
-  return { c, kv, engine, apps, launched, brain };
+  return { c, kv, engine, apps, launched, closed, acts, brain };
 };
 
 test("el catálogo trae Adobe, 3D, CAD, audio/video y Office, con nombre para buscar el programa", () => {
@@ -519,4 +521,151 @@ test("la voz nativa entrega frases y avisa de errores en español", async () => 
 
 test("el nombre de Hocki se reconoce aunque el motor lo escriba distinto", () => {
   for (const n of ["Yoqui", "Joqui", "Jocki", "Hoqui"]) assert.equal(parseVoice(`${n} fuera`).intent, "stop", n);
+});
+
+import { procKeys, cleanProgramName } from "../src/hocki/apps.ts";
+
+test("cerrar una app: pide permiso la primera vez y luego la cierra, sin forzar", () => {
+  const { brain, closed } = mkApps();
+  assert.ok(brain.handle("cierra illustrator").text.includes("necesito tu permiso"));
+  assert.equal(closed.length, 0);
+  assert.ok(brain.handle("sí").text.includes("Cerrando Illustrator"));
+  assert.deepEqual(closed, ["illustrator"]);
+  assert.ok(brain.handle("cierra illustrator").text.includes("Cerrando"));
+  assert.equal(closed.length, 2);
+  assert.equal(brain.handle("cierra hocki"), null, "cerrar a Hocki no es cerrar una app");
+});
+
+test("el permiso por programa vale para abrir y para cerrar, y quitarlo impide ambas", () => {
+  const { brain, launched, closed } = mkApps();
+  brain.handle("abre blender"); brain.handle("sí");
+  brain.handle("cierra blender");
+  assert.deepEqual([launched.length, closed.length], [1, 1]);
+  brain.handle("quita el permiso de blender");
+  assert.ok(brain.handle("cierra blender").text.includes("necesito tu permiso"));
+  assert.equal(closed.length, 1);
+});
+
+test("los procesos que se cierran salen del nombre del proceso, no del título de ninguna ventana", () => {
+  const word = APP_CATALOG.find((a) => a.id === "word");
+  assert.deepEqual(procKeys(word), ["winword"]);
+  assert.deepEqual(procKeys(APP_CATALOG.find((a) => a.id === "illustrator")), ["illustrator"]);
+  assert.deepEqual(procKeys(APP_CATALOG.find((a) => a.id === "aftereffects")), ["afterfx"]);
+});
+
+test("cualquier programa instalado: se pide por su nombre, con permiso, y la consola nunca", () => {
+  const c = clock();
+  const engine = new PermissionEngine();
+  const apps = new AppAutomation(engine, "windows");
+  apps.mode = "any";
+  const launched = [];
+  const brain = HockiBrain.load({ engine, kv: new MemoryKV(), now: c.now, apps, launch: (a) => { launched.push(a.find); } });
+  brain.onboard = "done";
+  assert.ok(brain.handle("abre el programa de Nuestro Editor Raro").text.includes("necesito tu permiso"));
+  assert.ok(brain.handle("sí").text.includes("Abriendo"));
+  assert.deepEqual(launched, [["nuestro", "editor", "raro"]]);
+  for (const bad of ["powershell", "la consola", "cmd", "regedit", "el terminal"]) assert.equal(brain.handle(`abre ${bad}`), null, bad);
+  assert.equal(cleanProgramName("a".repeat(50)), null);
+  assert.equal(cleanProgramName("uno dos tres cuatro cinco"), null);
+  // Se acuerda del programa propio y de su permiso al reiniciar.
+  const again = HockiBrain.load({ engine: new PermissionEngine(), kv: brainKvOf(brain), now: c.now, apps: Object.assign(new AppAutomation(new PermissionEngine(), "windows"), { mode: "any" }) });
+  assert.ok(again);
+});
+
+function brainKvOf(brain) { brain.save(); return brain["d"].kv; }
+
+test("registrar la voz pide permiso antes, y se puede borrar o cambiar a obedecer a cualquiera", () => {
+  const { brain } = mkApps();
+  const ask = brain.handle("registra mi voz");
+  assert.ok(ask.text.includes("huella") && !ask.action);
+  assert.equal(brain.handle("no").action, undefined);
+  brain.handle("registra mi voz");
+  assert.equal(brain.handle("sí").action, "voice_enroll");
+  assert.equal(brain.handle("borra mi voz").action, "voice_forget");
+  assert.equal(brain.handle("obedece a cualquiera").action, "voice_gate_off");
+  assert.equal(brain.handle("solo mi voz").action, "voice_gate_on");
+});
+
+import { matchSkill, skillsFor, sendKeysText } from "../src/hocki/app-skills.ts";
+
+test("atajos por programa: la frase más larga gana y una charla larga no dispara nada", () => {
+  const il = skillsFor("illustrator");
+  assert.equal(matchSkill("guarda", il).keys, "^s");
+  assert.equal(matchSkill("guardar como", il).keys, "^+s");
+  assert.equal(matchSkill("rehaz", il).keys, "^+z", "Adobe rehace con Ctrl+Shift+Z");
+  assert.equal(matchSkill("rehaz", skillsFor("word")).keys, "^y", "Office con Ctrl+Y");
+  assert.equal(matchSkill("guardar como", skillsFor("word")).keys, "{F12}");
+  assert.equal(matchSkill("crea contornos", il).keys, "^+o");
+  assert.equal(matchSkill("linea", skillsFor("autocad")).keys, "l{ENTER}");
+  assert.equal(matchSkill("guarda el archivo que te mande ayer por correo electronico", il), null);
+  assert.equal(sendKeysText("1+1 = {2} (sí)"), "1{+}1 = {{}2{}} {(}sí{)}");
+});
+
+test("manejar un programa: permiso una sola vez, luego obedece, y lo delicado se pregunta", () => {
+  const { brain, acts } = mkApps();
+  const ask = brain.handle("en illustrator crea contornos");
+  assert.ok(ask.text.includes("una sola vez"));
+  assert.equal(acts.length, 0);
+  const ok = brain.handle("sí");
+  assert.ok(ok.text.includes("Crear contornos") && ok.text.includes("Aviso de privacidad") && ok.text.includes("Aviso legal"));
+  assert.deepEqual(acts[0], ["illustrator", "keys", "^+o"]);
+  // Ya no pregunta, y recuerda el programa con el que trabajas.
+  brain.handle("guarda");
+  assert.deepEqual(acts[1], ["illustrator", "keys", "^s"]);
+  assert.ok(!brain.handle("agrupa").text.includes("Aviso"), "los avisos salen solo la primera vez");
+  // Borrar: pregunta antes
+  assert.ok(brain.handle("borra").text.includes("¿Lo hago?"));
+  assert.equal(acts.length, 3);
+  assert.ok(brain.handle("no").text.includes("no lo hice"));
+  brain.handle("borra"); brain.handle("sí");
+  assert.deepEqual(acts[3], ["illustrator", "keys", "{DELETE}"]);
+});
+
+test("escribir y pulsar botones por su nombre; aprender un programa", () => {
+  const { brain, acts } = mkApps();
+  brain.handle("abre word"); brain.handle("sí");
+  brain.handle("escribe: Informe (versión 2)");
+  assert.deepEqual(acts[0], ["word", "type", "Informe {(}versión 2{)}"]);
+  brain.handle("haz clic en Insertar");
+  assert.deepEqual(acts[1], ["word", "click", "Insertar"]);
+  assert.ok(brain.handle("pulsa el botón Enviar").text.includes("¿Lo hago?"), "enviar es delicado");
+  brain.handle("aprende word");
+  assert.deepEqual(acts.at(-1), ["word", "list", ""]);
+  assert.ok(brain.handle("qué sabes hacer en word").text.includes("Negrita"));
+});
+
+test("sin programa activo, una orden suelta no se convierte en atajo", () => {
+  const { brain, acts } = mkApps();
+  assert.equal(brain.handle("guarda"), null);
+  assert.equal(acts.length, 0);
+  assert.ok(brain.handle("escribe: hola").text.includes("¿En qué programa"));
+  assert.ok(brain.handle("borra mi memoria").text.length > 0);
+  assert.equal(acts.length, 0);
+});
+
+test("tareas completas: permiso para mirar la pantalla una vez, permiso del programa una vez, y arranca", () => {
+  const c = clock();
+  const engine = new PermissionEngine();
+  const apps = new AppAutomation(engine, "windows");
+  const started = [];
+  const agent = { start: (a, goal) => { started.push([a.id, goal]); return true; }, answer: () => false, waiting: () => false, busy: () => false, halt: () => {} };
+  const kv = new MemoryKV();
+  const brain = HockiBrain.load({ engine, kv, now: c.now, apps, agent, act: () => {}, aiName: () => "Ollama" });
+  brain.onboard = "done";
+  const ask = brain.handle("en Illustrator, hazlo tú: exporta el logo en PNG");
+  assert.ok(ask.text.includes("Ollama") && ask.text.includes("captura"));
+  const perm = brain.handle("sí");
+  assert.ok(perm.text.includes("una sola vez"));
+  assert.equal(started.length, 0);
+  assert.ok(brain.handle("sí").text.includes("paso a paso"));
+  assert.deepEqual(started[0], ["illustrator", "exporta el logo en PNG"]);
+  // Ya no vuelve a pedir nada; una orden larga con el programa nombrado también es una tarea.
+  brain.handle("en Illustrator cambia el color del fondo a azul");
+  assert.deepEqual(started[1], ["illustrator", "cambia el color del fondo a azul"]);
+  // Una pregunta no es una tarea.
+  assert.equal(brain.handle("en Illustrator cómo hago un degradado?")?.text?.includes("paso a paso") ?? false, false);
+  // Se acuerda del permiso de mirar al reiniciar.
+  const again = HockiBrain.load({ engine, kv, now: c.now, apps, agent, act: () => {} });
+  again.onboard = "done";
+  assert.ok(again.handle("en Illustrator, hazlo tú: guarda una copia").text.includes("paso a paso"));
 });

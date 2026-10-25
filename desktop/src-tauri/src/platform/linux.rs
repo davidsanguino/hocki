@@ -317,6 +317,11 @@ pub fn launch_shortcut(_keywords: &[String]) -> bool {
     false
 }
 
+/// Closing apps by name is only built for Windows so far.
+pub fn close_app(_keywords: &[String]) -> usize {
+    0
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 /// The few gtk-layer-shell calls we need, straight from the C library.

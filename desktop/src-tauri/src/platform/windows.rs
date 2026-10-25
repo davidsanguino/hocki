@@ -606,3 +606,28 @@ pub fn set_layer_overlay(_win: &WebviewWindow, _on: bool) {}
 pub fn layer_display(_island: &WebviewWindow, _hocki: &WebviewWindow) -> Option<(f64, f64)> {
     None
 }
+
+/// Solo se compara el nombre del proceso (nunca el título: una pestaña del navegador no es el programa).
+/// Cierra con cortesía las ventanas de un programa (como pulsar la X): si tiene algo sin
+/// guardar, el propio programa pregunta. Nunca fuerza el cierre ni toca procesos del sistema.
+/// Devuelve cuántas ventanas se pidió cerrar.
+pub fn close_app(keywords: &[String]) -> usize {
+    let words: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).filter(|k| !k.is_empty()).collect();
+    if words.is_empty() {
+        return 0;
+    }
+    let list = words.iter().map(|w| format!("'{}'", w.replace('\'', ""))).collect::<Vec<_>>().join(",");
+    let script = format!(
+        "$k=@({list}); $n=0; Get-Process | Where-Object {{ $_.MainWindowHandle -ne 0 }} | ForEach-Object {{ \
+$t=$_.ProcessName.ToLower(); \
+if($t -match 'hocki|explorer|powershell|dwm|winlogon|csrss'){{ return }}; \
+$ok=$true; foreach($w in $k){{ if(-not $t.Contains($w)){{ $ok=$false }} }}; \
+if($ok){{ if($_.CloseMainWindow()){{ $n++ }} }} }}; [Console]::WriteLine($n)"
+    );
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script]);
+    match no_console(&mut cmd).output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).trim().parse::<usize>().unwrap_or(0),
+        Err(_) => 0,
+    }
+}

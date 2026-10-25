@@ -252,3 +252,21 @@ export function browserBackend(): SpeechBackend | null {
     cancel() { synth.cancel(); },
   };
 }
+
+/**
+ * Voz propia de Windows primero (sin internet, con voces latinas); si no responde, la del navegador.
+ * `io` lo pone la plataforma para no atar este archivo a Tauri.
+ */
+export function nativeBackend(
+  io: { speak(text: string, voice: number): Promise<boolean | null>; stop(): void },
+  fallback: SpeechBackend | null,
+): SpeechBackend {
+  return {
+    speak(text, o) {
+      void io.speak(text, voicePrefs.index).then((ok) => {
+        if (ok !== true) fallback?.speak(text, o);
+      });
+    },
+    cancel() { io.stop(); fallback?.cancel(); },
+  };
+}

@@ -236,6 +236,35 @@ fn read_prefix(path: &str, limit: usize) -> Option<String> {
     }
 }
 
+/// The user's message: text, plus the picture itself when a dropped image (or the screen
+/// helper's screenshot) rides along — vision models (llava, qwen2.5vl, gemma3…) read it.
+fn user_content(first: bool, context: Option<&ChatContext>, query: &str) -> Value {
+    let text = user_text(first, context, query);
+    if let Some(ChatContext::File { path, .. }) = context.filter(|_| first) {
+        if let Some(url) = image_data_url(path) {
+            return json!([{ "type": "image_url", "image_url": { "url": url } }, { "type": "text", "text": text }]);
+        }
+    }
+    json!(text)
+}
+
+/// A PNG/JPEG/WebP/GIF of at most 5 MB as a data URL.
+fn image_data_url(path: &str) -> Option<String> {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let media = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => return None,
+    };
+    if std::fs::metadata(path).ok()?.len() > 5_000_000 {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("data:{media};base64,{}", crate::claude::base64_for(&bytes)))
+}
+
 fn user_text(first: bool, context: Option<&ChatContext>, query: &str) -> String {
     match context.filter(|_| first) {
         Some(ChatContext::File { name, path }) => format!("{}\n\n{query}", file_note(name, path)),
@@ -282,7 +311,7 @@ pub async fn send_with(
         return Err(t("Pick a model above the chat box first."));
     }
     let turn = chat.begin(server.id);
-    let user = json!({ "role": "user", "content": user_text(turn.first, context.as_ref(), &query) });
+    let user = json!({ "role": "user", "content": user_content(turn.first, context.as_ref(), &query) });
     let body = request_body(model, &chat::system_prompt(false), &turn.history, &user);
 
     let answer = stream(&base, server.key.as_deref(), model, &body, on_delta).await?;

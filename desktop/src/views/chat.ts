@@ -296,6 +296,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       if (!local) brain.afterTurn(query, reply.text);
       else if (local.action) window.dispatchEvent(new CustomEvent("hocki-action", { detail: local.action }));
       State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      window.dispatchEvent(new CustomEvent("hocki-speak", { detail: reply.text }));
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {

@@ -398,9 +398,27 @@ export const Bridge = {
   /** Asleep, the cursor poll stops. */
   /** Opens an installed app by words of its Start-menu shortcut name (Windows). */
   launchApp: (keywords: string[]) => call<boolean>("launch_app", { keywords }),
+  /** Asks a program to close its windows (never forced); how many were asked. */
+  closeApp: (keywords: string[]) => call<number>("close_app", { keywords }),
+  /** Drives an authorised program: shortcut keys, text, a button by name, or the list of its buttons. */
+  /** Screen helper: a screenshot for the chosen AI, its answer, and mouse/keyboard. */
+  agentSnapshot: () => call<{ width: number; height: number; scale: number; left: number; top: number }>("agent_snapshot"),
+  agentThink: (prompt: string) => callOrThrow<string>("agent_think", { prompt }),
+  agentForget: () => call<void>("agent_forget"),
+  agentInput: (kind: "click" | "double" | "right" | "scroll" | "keys", x: number, y: number, text: string) =>
+    call<boolean>("agent_input", { kind, x, y, text }),
+  /** Programs and apps in the Start menu (names and AppIDs only). */
+  scanInstalled: () => call<{ name: string; appId: string }[]>("scan_installed"),
+  launchAppId: (appId: string) => call<boolean>("launch_app_id", { appId }),
+  appAct: (procs: string[], action: "keys" | "type" | "click" | "list", arg: string) =>
+    call<string[]>("app_act", { procs, action, arg }),
   /** Windows' own speech recognizer (no internet); lines arrive as the "voice-native" event. */
   voiceNativeStart: () => call<boolean>("voice_native_start"),
   voiceNativeStop: () => call<void>("voice_native_stop"),
+  /** Windows' own voices (no internet): speak, stop, and the Spanish voices installed. */
+  voiceSpeak: (text: string, voice: number) => call<boolean>("voice_speak", { text, voice }),
+  voiceSpeakStop: () => call<void>("voice_speak_stop"),
+  voiceList: () => call<string[]>("voice_list"),
   desktopSetAsleep: (asleep: boolean) => call<void>("desktop_hocki_set_asleep", { asleep }),
   /** Windows: where the cursor is, the walkable area and the rhythm of input, to roam. */
   desktopRoamInput: () => call<{
