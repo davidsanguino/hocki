@@ -2,13 +2,17 @@
 // funcione en cualquier PC, no solo en el servidor que compila. Luego llama a `tauri build`.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
+// Los enlaces de whisper.cpp se generan en cada sistema (los que trae el paquete son de Linux y
+// en Windows no encajan). Para eso hace falta libclang: los servidores de GitHub lo traen con LLVM.
+const llvm = ["C:\\Program Files\\LLVM\\bin", "C:\\Program Files (x86)\\LLVM\\bin"].find((d) => existsSync(`${d}\\libclang.dll`));
+
 const env = {
-  // Trae sus enlaces ya generados: no hace falta libclang.
-  WHISPER_DONT_GENERATE_BINDINGS: "1",
+  ...(process.platform === "win32" && llvm ? { LIBCLANG_PATH: llvm } : {}),
   // Instrucciones de CPU comunes (AVX2) en vez de las del servidor que compila.
   GGML_NATIVE: "OFF",
   GGML_AVX: "ON",
