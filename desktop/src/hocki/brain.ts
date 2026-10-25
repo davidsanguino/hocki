@@ -16,6 +16,7 @@ import { appNames, cleanProgramName, matchApp, type AppAutomation, type AppDef }
 import { matchSkill, sendKeysText, skillsFor } from "./app-skills";
 import { LEGAL_NOTICE, PRIVACY_NOTICE } from "./notices";
 import { findInstalled, ingest, summarize, type InstalledApp, type Inventory } from "./installed";
+import { domainNamed, expertContext, tipsText } from "./domains";
 import { TOOLS, toolById, toolHelp, toolPrompt, type Tool } from "./tools";
 import type { KV } from "./storage";
 
@@ -69,6 +70,10 @@ export interface BrainState {
   inventory?: Inventory;
   inventoryConsent?: boolean;
   scanOffered?: boolean;
+  /** Tareas que salieron bien, para repetirlas más rápido. */
+  recipes?: Recipe[];
+  /** Atajos que le enseñaste: «cuando diga X, haz Y». */
+  aliases?: Record<string, string>;
   profession: string;
   name?: string;
   memory: MemoryData;
@@ -103,9 +108,22 @@ export interface BrainDeps {
 export type AppAction = "keys" | "type" | "click" | "list";
 interface PendingAct { appId: string; action: AppAction | "agent"; arg: string; label: string }
 
+/** Cómo se hizo una tarea que salió bien: Hocki la reutiliza la próxima vez (aprende rápido). */
+export interface Recipe { appId: string; goal: string; steps: string[]; at: number }
+
+/** Parecido entre dos frases (palabras en común). */
+export function similarity(a: string, b: string): number {
+  const words = (x: string) => new Set(normalize(x).split(" ").filter((w) => w.length > 2));
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let common = 0;
+  for (const w of A) if (B.has(w)) common++;
+  return common / Math.max(A.size, B.size);
+}
+
 /** El ayudante de pantalla (screen-agent.ts): mira, piensa con la IA elegida y actúa. */
 export interface AgentPort {
-  start(app: AppDef, goal: string, learned: string[], done: (r: { status: string; message: string; steps: number }) => void): boolean;
+  start(app: AppDef, goal: string, learned: string[], done: (r: { status: string; message: string; steps: number; history?: string[] }) => void, recipe?: Recipe): boolean;
   answer(yes: boolean): boolean;
   waiting(): boolean;
   busy(): boolean;
@@ -121,6 +139,8 @@ export const HELP_TEXT = [
   "• \"Recuérdame llamar a mamá en 10 minutos\" o \"…mañana a las 8\" o \"cada 30 minutos\".",
   "• \"Qué tengo programado\", \"cancela todo\", \"qué pasó mientras no estaba\", \"registro de hoy\".",
   "• \"Sal a pasear\" / \"quédate quieto\" / \"vuelve a la isla\": me muevo por tu pantalla sin estorbar.",
+  "• \"Cuando diga modo diseño, abre Illustrator\": aprendo tus propios atajos. \"Qué atajos te enseñé\", \"olvida el atajo …\". \"Consejos de marketing\" (o diseño, video, Excel, 3D…).",
+  "• Di «¡Hey Hocki!» y luego tu orden (o todo junto: «Hey Hocki, abre Word»). \"Voz más aguda/grave\", \"habla más rápido/despacio\", \"voz natural\" o \"voz de Windows\" cambian cómo hablo.",
   "• \"Registra mi voz\": aprendo cómo suena tu voz (con tu permiso y el del micrófono) y solo te obedezco a ti. \"Borra mi voz\" la elimina. \"Cambia de voz\" prueba otra voz mía.",
   "• \"Escúchame siempre\": activo la voz. Dime \"Hocki, abre\", \"Hocki, cierra\" o \"Hocki fuera\".",
   "• \"Estudia mi equipo\": aprendo qué programas y apps tienes. \"¿Qué programas tengo?\", \"¿tengo Blender?\".",
@@ -129,7 +149,8 @@ export const HELP_TEXT = [
 ].join("\n");
 
 /** Cosas que Hocki hace en pantalla; las ejecuta la isla al recibirlas. */
-export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off" | "voice_next" | "voice_test" | "voice_enroll" | "voice_forget" | "voice_gate_on" | "voice_gate_off";
+export type HockiAction = "walk" | "still" | "home" | "open" | "close" | "listen_on" | "listen_off" | "voice_next" | "voice_test" | "voice_enroll" | "voice_forget" | "voice_gate_on" | "voice_gate_off"
+  | "voice_higher" | "voice_lower" | "voice_faster" | "voice_slower" | "voice_natural" | "voice_system" | "voice_download";
 export interface LocalReply { text: string; action?: HockiAction }
 
 const HINT_AFTER = "\nSi quieres, dime «activa mis rutinas» para recordatorios de tu oficio y «activa tu memoria» para que recuerde lo que me pidas. «comandos» muestra todo.";
@@ -158,6 +179,9 @@ export class HockiBrain {
   private inventoryConsent = false;
   private scanOffered = false;
   private pendingScan = false;
+  recipes: Recipe[] = [];
+  aliases: Record<string, string> = {};
+  private pendingAsk: { onYes: () => string; onNo: () => string } | null = null;
   private scanning = false;
   /** Programa → AppID de Windows (para abrir también las apps de la Tienda). */
   private appIds = new Map<string, string>();
@@ -181,6 +205,8 @@ export class HockiBrain {
     this.noticesShown = !!saved?.noticesShown;
     this.screenConsent = !!saved?.screenConsent;
     this.inventoryConsent = !!saved?.inventoryConsent;
+    this.recipes = Array.isArray(saved?.recipes) ? saved!.recipes : [];
+    this.aliases = saved?.aliases && typeof saved.aliases === "object" ? saved.aliases : {};
     this.scanOffered = !!saved?.scanOffered;
     if (saved?.inventory && Array.isArray(saved.inventory.apps)) {
       this.inventory = saved.inventory;
@@ -205,7 +231,7 @@ export class HockiBrain {
   }
 
   save() {
-    const s: BrainState = { onboard: this.onboard, tool: this.tool, grants: this.d.engine.grants, apps: this.d.apps?.grantedIds(), customs: this.d.apps?.list().filter((a) => a.custom && a.find && !a.id.startsWith("i-")).map((a) => ({ id: a.id, name: a.name, find: a.find! })), learned: this.learned, noticesShown: this.noticesShown, screenConsent: this.screenConsent, inventory: this.inventory ?? undefined, inventoryConsent: this.inventoryConsent, scanOffered: this.scanOffered, profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
+    const s: BrainState = { onboard: this.onboard, tool: this.tool, grants: this.d.engine.grants, apps: this.d.apps?.grantedIds(), customs: this.d.apps?.list().filter((a) => a.custom && a.find && !a.id.startsWith("i-")).map((a) => ({ id: a.id, name: a.name, find: a.find! })), learned: this.learned, noticesShown: this.noticesShown, screenConsent: this.screenConsent, inventory: this.inventory ?? undefined, inventoryConsent: this.inventoryConsent, scanOffered: this.scanOffered, recipes: this.recipes, aliases: this.aliases, profession: this.profession, name: this.name, memory: this.memory.data, journal: this.journal.snapshot(), jobs: this.jobs.snapshot() };
     this.d.kv.set(KEY, JSON.stringify(s));
   }
 
@@ -231,9 +257,13 @@ export class HockiBrain {
   /** Devuelve la respuesta si Hocki lo resuelve él mismo; null si es para el asistente de IA. */
   handle(input: string): LocalReply | null {
     const text = input.trim();
-    const t = normalize(text);
+    let t = normalize(text);
     if (!t) return null;
-    const r = this.route(text, t);
+    // Un atajo que le enseñaste: se cambia por la orden completa.
+    let said = text;
+    const alias = this.aliases[t] ?? this.aliases[t.replace(/^(hey |oye )?hocki /, "")];
+    if (alias) { said = alias; t = normalize(alias); }
+    const r = this.route(said, t);
     if (r) { this.journal.add("chat", "Orden resuelta por Hocki"); this.save(); }
     return r;
   }
@@ -287,6 +317,12 @@ export class HockiBrain {
   }
 
   private route(text: string, t: string): LocalReply | null {
+    // Una pregunta de sí/no que hizo la isla (descargas de voz, etc.)
+    if (this.pendingAsk) {
+      const a = this.pendingAsk;
+      if (/^(si|dale|claro|ok|de una|acepto|hazlo|listo|descargalo|adelante)$/.test(t)) { this.pendingAsk = null; return { text: a.onYes() }; }
+      if (/^(no|luego|ahora no|despues|no gracias|cancela)$/.test(t)) { this.pendingAsk = null; return { text: a.onNo() }; }
+    }
     if (this.onboard !== "done") {
       const r = this.onboard_(text, t);
       if (r && (this.onboard as OnboardStep) === "done" && !this.inventoryConsent && !this.scanOffered && this.d.scan) {
@@ -310,6 +346,9 @@ export class HockiBrain {
       }
     }
 
+    const learnR = this.learnRoute(text, t);
+    if (learnR) return learnR;
+
     const inv = this.inventoryRoute(text, t);
     if (inv) return inv;
 
@@ -326,6 +365,13 @@ export class HockiBrain {
     if (/\b(quedate quieto|no pasees|deja de pasear|no camines)\b/.test(t)) return { text: "Me quedo quietecito aquí.", action: "still" };
     if (/\b(vuelve a la isla|regresa a la isla|a la isla)\b/.test(t)) return { text: "Vuelvo a la isla.", action: "home" };
     if (/\b(cambia (de|tu) voz|otra voz|prueba otra voz|voz diferente)\b/.test(t)) return { text: "Probando otra voz…", action: "voice_next" };
+    if (/\b(voz mas aguda|habla mas agudo|sube (el|tu) tono|mas agudo)\b/.test(t)) return { text: "Un poco más agudo.", action: "voice_higher" };
+    if (/\b(voz mas grave|habla mas grave|baja (el|tu) tono|mas grave)\b/.test(t)) return { text: "Un poco más grave.", action: "voice_lower" };
+    if (/\b(habla mas rapido|mas rapido al hablar|acelera (la|tu) voz)\b/.test(t)) return { text: "Hablo un poco más rápido.", action: "voice_faster" };
+    if (/\b(habla mas (lento|despacio)|mas despacio al hablar)\b/.test(t)) return { text: "Hablo más despacio.", action: "voice_slower" };
+    if (/\b(descarga|instala|baja)\b.*\b(tu voz|tu oido|la voz|el oido)\b/.test(t)) return { text: "Preparo mi oído y mi voz…", action: "voice_download" };
+    if (/\b(voz natural|tu voz propia|usa tu voz|voz de hocki)\b/.test(t)) return { text: "Uso mi voz natural.", action: "voice_natural" };
+    if (/\b(voz del sistema|voz de windows|voz normal)\b/.test(t)) return { text: "Uso la voz de Windows.", action: "voice_system" };
     if (/\b(prueba tu voz|habla para probar|di algo|hablame)\b/.test(t)) return { text: "¡Hola, jefe! Soy Hocki. ¿Qué tal suena mi voz?", action: "voice_test" };
     if (/\b(escuchame siempre|escucha siempre|activa (el )?micro(fono)?|activa la voz|activa tu oido)\b/.test(t))
       return { text: "Listo, te escucho. Dime «Hocki» antes de cada orden o pregunta. En Windows uso el reconocimiento de voz del propio sistema, sin internet; necesita el idioma español con voz instalado.", action: "listen_on" };
@@ -721,6 +767,37 @@ export class HockiBrain {
     return skill.delicate ? this.askDelicate(app, p) : this.request(app, p);
   }
 
+  // ── Aprender rápido: atajos que le enseñas y consejos por campo ───────────
+
+  private learnRoute(text: string, t: string): LocalReply | null {
+    const m = text.match(/^(?:cuando|si)\s+(?:te\s+)?digas?\s+["«“']?([^"»”',:]+?)["»”']?\s*[,:]\s*(.+)$/i);
+    if (m) {
+      const trigger = normalize(m[1]);
+      const action = m[2].trim().replace(/^(tu\s+|entonces\s+)/i, "");
+      if (trigger.length < 2 || trigger.split(" ").length > 6) return { text: "Dime un atajo corto, por ejemplo: «cuando diga modo diseño, abre Illustrator»." };
+      if (Object.keys(this.aliases).length >= 60) return { text: "Ya tengo muchos atajos; dime «olvida el atajo …» para hacer espacio." };
+      this.aliases[trigger] = action;
+      this.journal.add("memory", `Atajo aprendido: ${trigger}`);
+      return { text: `¡Aprendido! Cuando digas «${m[1].trim()}» haré: ${action}` };
+    }
+    const f = t.match(/^olvida (?:el )?atajo (.+)$/);
+    if (f) {
+      const k = normalize(f[1]);
+      if (this.aliases[k]) { delete this.aliases[k]; return { text: `Olvidé el atajo «${f[1]}».` }; }
+      return { text: "No tenía ese atajo." };
+    }
+    if (/^(que|cuales) atajos (te ensene|sabes|tienes|conoces)/.test(t)) {
+      const list = Object.entries(this.aliases);
+      return { text: list.length ? `Atajos que me enseñaste:\n${list.map(([k, v]) => `• «${k}» → ${v}`).join("\n")}` : "Aún no me has enseñado atajos. Prueba: «cuando diga modo diseño, abre Illustrator»." };
+    }
+    const d = t.match(/^(?:que sabes de|consejos (?:de|para|sobre)|tips (?:de|para|sobre)|ensename (?:de|sobre)|dame consejos (?:de|para|sobre))\s+(.+)$/);
+    if (d) {
+      const dom = domainNamed(d[1]);
+      if (dom) return { text: tipsText(dom) };
+    }
+    return null;
+  }
+
   // ── Lo que tienes instalado ───────────────────────────────────────────────
 
   private inventoryRoute(text: string, t: string): LocalReply | null {
@@ -769,6 +846,9 @@ export class HockiBrain {
       this.scanning = false;
     }
   }
+
+  /** La isla deja una pregunta de sí/no: la próxima respuesta «sí» o «no» la contesta. */
+  ask(onYes: () => string, onNo: () => string) { this.pendingAsk = { onYes, onNo }; }
 
   /** Quien ya terminó la bienvenida antes de esta versión: la oferta de estudiar el equipo, una vez. */
   scanOfferOnce(): string | null {
@@ -841,11 +921,22 @@ export class HockiBrain {
       const agent = this.d.agent;
       if (!agent) return { text: "Ver la pantalla no está disponible aquí." };
       this.lastGoal = { appId: app.id, goal: p.arg };
+      const recipe = this.recipes
+        .filter((x) => x.appId === app.id)
+        .map((x) => ({ x, s: similarity(x.goal, p.arg) }))
+        .filter((c) => c.s >= 0.5)
+        .sort((a, b) => b.s - a.s)[0]?.x;
       const ok = agent.start(app, p.arg, this.learned[app.id] ?? [], (r) => {
         this.journal.add("approval", `${app.name}: tarea ${r.status} (${r.steps} pasos)`);
+        // Lo que salió bien queda aprendido para la próxima vez.
+        if (r.status === "done" && r.history?.length) {
+          this.recipes = this.recipes.filter((x) => !(x.appId === app.id && similarity(x.goal, p.arg) >= 0.8));
+          this.recipes.push({ appId: app.id, goal: p.arg, steps: r.history.slice(0, 20), at: this.now() });
+          if (this.recipes.length > 80) this.recipes.splice(0, this.recipes.length - 80);
+        }
         this.save();
-        this.d.notify?.(r.message);
-      });
+        this.d.notify?.(r.message + (recipe && r.status === "done" ? " (lo hice como la vez pasada)" : ""));
+      }, recipe);
       if (!ok) return { text: "Ya estoy haciendo otra tarea. Dime «para» si quieres que la deje." };
       return { text: `Voy con eso en ${app.name}: miro la pantalla y lo hago paso a paso (máximo 15). Di «para» o «Hocki fuera» para detenerme.` };
     }
@@ -914,9 +1005,10 @@ export class HockiBrain {
     const tool = this.tool ? toolById(this.tool) : undefined;
     if (first) {
       const sys = buildSystemPrompt({ profession: this.professionProfile, name: this.name, facts, now: new Date(this.now()) });
-      return `${sys}${tool ? `\n\n${toolPrompt(tool)}` : ""}\n\nPregunta de la persona:\n${query}`;
+      const exp = expertContext(query);
+      return `${sys}${tool ? `\n\n${toolPrompt(tool)}` : ""}${exp ? `\n\n${exp}` : ""}\n\nPregunta de la persona:\n${query}`;
     }
-    const ctx = [tool ? `Herramienta activa: ${tool.name} (${tool.scripting}). Responde con scripts completos y dónde ejecutarlos.` : "", facts.length ? `Recuerda: ${facts.join("; ")}` : ""].filter(Boolean).join(" ");
+    const ctx = [tool ? `Herramienta activa: ${tool.name} (${tool.scripting}). Responde con scripts completos y dónde ejecutarlos.` : "", facts.length ? `Recuerda: ${facts.join("; ")}` : "", expertContext(query)].filter(Boolean).join(" ");
     return ctx ? `(${ctx})\n\n${query}` : query;
   }
 

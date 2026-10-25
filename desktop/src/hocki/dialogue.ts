@@ -270,3 +270,54 @@ export function nativeBackend(
     cancel() { io.stop(); fallback?.cancel(); },
   };
 }
+
+/** Cómo suena Hocki con su voz natural: tono (velocidad de reproducción) y ritmo al sintetizar. */
+export const hockiVoice = { pitch: 1.08, speed: 1.05, natural: true };
+
+/**
+ * La voz natural de Hocki (Piper, en el equipo) con su "toque": se reproduce un poco más aguda
+ * y viva que la voz original, así suena única. Si aún no está descargada, habla la de reserva.
+ */
+export function naturalBackend(
+  io: { speak(text: string, speed: number): Promise<string | null> },
+  fallback: SpeechBackend,
+  onPlay?: (ms: number) => void,
+): SpeechBackend {
+  let ctx: AudioContext | null = null;
+  let current: AudioBufferSourceNode | null = null;
+  let token = 0;
+  const stop = () => { try { current?.stop(); } catch { /* ya terminó */ } current = null; };
+  return {
+    speak(text, o) {
+      const my = ++token;
+      stop();
+      if (!hockiVoice.natural) { fallback.speak(text, o); return; }
+      void io.speak(text, hockiVoice.speed).then(async (b64) => {
+        if (my !== token) return;
+        if (!b64) { fallback.speak(text, o); return; }
+        try {
+          const AC = (globalThis as unknown as { AudioContext?: typeof AudioContext }).AudioContext;
+          if (!AC) { fallback.speak(text, o); return; }
+          ctx ??= new AC();
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const buf = await ctx.decodeAudioData(bytes.buffer);
+          if (my !== token) return;
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.playbackRate.value = hockiVoice.pitch;
+          const gain = ctx.createGain();
+          gain.gain.value = Math.max(0, Math.min(1, o.volume));
+          src.connect(gain); gain.connect(ctx.destination);
+          current = src;
+          src.start();
+          onPlay?.((buf.duration / hockiVoice.pitch) * 1000);
+        } catch {
+          fallback.speak(text, o);
+        }
+      }, () => { if (my === token) fallback.speak(text, o); });
+    },
+    cancel() { token++; stop(); fallback.cancel(); },
+  };
+}

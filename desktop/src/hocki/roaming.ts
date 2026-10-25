@@ -33,6 +33,11 @@ export interface RoamFrame {
   opacity: number;
   /** Los clics atraviesan a Hocki (nunca roba una selección). */
   clickThrough: boolean;
+  /** A dónde va de verdad (el destino, o el rincón al que se aparta) y a qué velocidad máxima. */
+  goal: Point;
+  speed: number;
+  /** True si se está apartando (rincón) en vez de pasear. */
+  retreating: boolean;
 }
 
 export class ActivityTracker {
@@ -117,27 +122,34 @@ export function nextWanderTarget(
 export function stepRoam(
   prev: Point, target: Point, tracker: ActivityTracker, screen: { w: number; h: number },
   dt: number, avoid: Rect[] = [], cfg: RoamConfig = DEFAULT_ROAM,
+  /** El rincón al que ya se estaba apartando: se mantiene si sigue libre (no titubea entre rincones). */
+  prefer?: Point,
 ): RoamFrame {
   const mode = tracker.mode(cfg);
+  const retreat = () => (prefer && !collides(prefer, tracker.cursor, avoid, cfg) ? prefer : retreatSpot(tracker.cursor, screen, avoid, cfg));
   let goal = target;
+  let retreating = false;
   let speed = 140; // px/s en paseo
   let opacity = 1;
 
   if (mode === "busy") {
     // La persona trabaja: se aparta rápido a un rincón y se vuelve casi invisible.
-    goal = retreatSpot(tracker.cursor, screen, avoid, cfg);
+    goal = retreat();
+    retreating = true;
     speed = 420;
     opacity = 0.35;
   } else if (mode === "idle") {
     speed = 60;
   } else if (collides(target, tracker.cursor, avoid, cfg)) {
-    goal = retreatSpot(tracker.cursor, screen, avoid, cfg);
+    goal = retreat();
+    retreating = true;
     speed = 300;
   }
 
   // Aunque ahora esté quieto, si el cursor se acerca a donde está, se corre.
   if (collides(prev, tracker.cursor, avoid, cfg) && mode !== "busy") {
-    goal = retreatSpot(tracker.cursor, screen, avoid, cfg);
+    goal = retreat();
+    retreating = true;
     speed = 360;
   }
 
@@ -148,5 +160,5 @@ export function stepRoam(
   pos.x = clamp(pos.x, cfg.margin, screen.w - cfg.size - cfg.margin);
   pos.y = clamp(pos.y, cfg.margin, screen.h - cfg.size - cfg.margin);
 
-  return { mode, pos, opacity, clickThrough: mode === "busy" };
+  return { mode, pos, opacity, clickThrough: mode === "busy", goal, speed, retreating };
 }

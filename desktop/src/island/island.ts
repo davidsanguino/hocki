@@ -18,7 +18,7 @@ import { SPOTIFY_ID, islandDances } from "../core/spotify";
 import { newHockiEngine } from "../hocki/engine";
 import { Greeting } from "../hocki/greeting";
 import { createMiniBot, pruneMiniBots, setMiniCursor, syncMiniBotStates, tickMiniBots } from "../hocki/minibots";
-import { Speaker, browserBackend, nativeBackend, voicePrefs, spanishVoiceNames, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
+import { Speaker, browserBackend, nativeBackend, naturalBackend, hockiVoice, voicePrefs, spanishVoiceNames, reply, speakable, phraseFor, tipFor } from "../hocki/dialogue";
 import { professionById } from "../hocki/professions";
 import { browserKV } from "../hocki/storage";
 import { parseVoice, stripName } from "../hocki/voice-commands";
@@ -34,6 +34,8 @@ import { IslandStateMachine } from "./fsm";
 import { refreshHookPills } from "./integrations";
 import { DesktopLink } from "./desktop";
 import { VoiceIdentity, printOf } from "../hocki/voice-id";
+import { EAR_PROMPT, earRecognizerFactory } from "../hocki/voice-ear";
+import { WakeWindow, detectWake, wakeAck } from "../hocki/wake";
 import { MicCapture, micErrorText } from "../hocki/voice-capture";
 import type { ViewCommand } from "./shortcuts";
 import { DRAG_THRESHOLD } from "../hocki/desktop-logic";
@@ -52,6 +54,9 @@ const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading"
 const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
+
+/** La app de escritorio en Windows: oído, voz y manos propias de Hocki. */
+const WINDOWS_APP = IS_TAURI && typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
 
 export class Island {
   readonly fsm = new IslandStateMachine();
@@ -84,30 +89,44 @@ export class Island {
   private engine = newHockiEngine();
   private greeting = new Greeting();
   private speaker = new Speaker(
-    IS_TAURI && navigator.userAgent.includes("Windows")
-      ? nativeBackend({ speak: (t, v) => Bridge.voiceSpeak(t, v), stop: () => void Bridge.voiceSpeakStop() }, browserBackend())
+    WINDOWS_APP
+      ? naturalBackend(
+          { speak: (t, speed) => Bridge.naturalVoiceSpeak(t, speed) },
+          nativeBackend({ speak: (t, v) => Bridge.voiceSpeak(t, v), stop: () => void Bridge.voiceSpeakStop() }, browserBackend()),
+          (ms) => { this.mutedUntil = Math.max(this.mutedUntil, Date.now() + ms + 500); },
+        )
       : (browserBackend() ?? { speak() {}, cancel() {} }),
   );
+  /** El oído propio (Whisper) cuando está descargado; si no, el de Windows o el del navegador. */
+  private useEar = false;
+  private wakeWindow = new WakeWindow();
+  private wakeCount = 0;
+  private earFactory = earRecognizerFactory({
+    startMic: async () => {
+      if (!this.capture.running) {
+        this.pushChat("", "Te pido permiso para usar el micrófono: acéptalo en la ventana que aparece. Solo escucho para entender lo que me dices; el audio no se guarda ni sale de tu equipo.");
+      }
+      return await this.capture.start();
+    },
+    listen: (fn) => this.capture.listen(fn),
+    sampleRate: () => this.capture.sampleRate,
+    transcribe: (b64) => Bridge.sttTranscribe(b64, EAR_PROMPT),
+    muted: () => Date.now() < this.mutedUntil,
+  });
   private voice = new VoiceService({
     // En Windows se usa el reconocedor del propio sistema (sin internet); en otros, el del navegador.
-    factory: IS_TAURI && navigator.userAgent.includes("Windows")
+    factory: () => (this.useEar ? this.earFactory() : this.fallbackFactory()),
+    onHeard: (text) => this.onVoiceHeard(text),
+    onState: (on, error) => this.onVoiceState(on, error),
+  });
+  private fallbackFactory = WINDOWS_APP
       ? nativeRecognizerFactory({
           start: async () => (await Bridge.voiceNativeStart()) ?? false,
           stop: async () => { await Bridge.voiceNativeStop(); },
           listen: async (h) => await onEvent<string>("voice-native", h),
         })
-      : browserRecognizerFactory(),
-    onHeard: (text) => this.onVoiceHeard(text),
-    onState: (on, error) => {
-      State.voiceOn = on;
-      if (error) {
-        console.warn(`Hocki: la escucha por voz no pudo activarse (${error})`);
-        State.chatHistory.push({ id: Date.now(), role: "assistant", content: voiceErrorText(error) });
-        window.setTimeout(() => this.alert("prompt"), 200);
-      }
-      State.notify();
-    },
-  });
+      : browserRecognizerFactory();
+
   private kv = browserKV();
   private chatterAt = Date.now();
   private lastEcho = 0;
@@ -179,6 +198,7 @@ export class Island {
     });
     window.addEventListener("hocki-action", (e) => this.doAction((e as CustomEvent<HockiAction>).detail));
     // Si la persona pidió que lo escuche siempre, vuelve a encender el micrófono al arrancar.
+    try { Object.assign(hockiVoice, JSON.parse(this.kv.get("hocki.voice.style") ?? "{}")); } catch { /* por defecto */ }
     { const n = Number(this.kv.get("hocki.voice")); voicePrefs.index = Number.isInteger(n) && n >= 0 && this.kv.get("hocki.voice") !== null ? n : -1; }
     if (this.kv.get("hocki.listen") === "on") window.setTimeout(() => { if (!this.voice.on) this.toggleVoice(); }, 3000);
     // Primera vez: Hocki se presenta y le pregunta su nombre y su oficio para adaptarse a cualquier persona.
@@ -508,22 +528,124 @@ export class Island {
     State.notify();
   }
 
+  private onVoiceState(on: boolean, error?: string) {
+    State.voiceOn = on;
+    if (error === "no-model") {
+      // Se borró el oído: se vuelve al reconocedor de Windows.
+      this.useEar = false;
+      if (this.kv.get("hocki.listen") === "on") window.setTimeout(() => this.startVoiceNow(), 300);
+    } else if (error) {
+      console.warn(`Hocki: la escucha por voz no pudo activarse (${error})`);
+      State.chatHistory.push({ id: Date.now(), role: "assistant", content: voiceErrorText(error) });
+      window.setTimeout(() => this.alert("prompt"), 200);
+    }
+    State.notify();
+  }
+
   /** Botón del micrófono: enciende o apaga la escucha por voz (opcional). */
   private toggleVoice() {
     if (this.voice.on) {
       this.voice.stop();
       this.speaker.halt();
+      if (!this.voiceId.gate) this.capture.stop();
       return;
     }
+    void this.prepareVoice();
+  }
+
+  private preparing = false;
+  /**
+   * Antes de escuchar: en Windows, el oído (Whisper) y la voz natural (Piper) se descargan una
+   * sola vez, con permiso. Sin ellos, Hocki usa lo que trae Windows.
+   */
+  private async prepareVoice() {
+    if (this.preparing) return;
+    this.preparing = true;
+    try {
+      if (WINDOWS_APP) {
+        const [ear, voz] = await Promise.all([Bridge.sttStatus(), Bridge.naturalVoiceStatus()]);
+        this.useEar = !!ear?.ready;
+        const missing: string[] = [];
+        if (!ear?.ready) missing.push("su oído (unos 57 MB), para entenderte cuando digas «¡Hey Hocki!»");
+        if (voz && voz.supported && !voz.ready) missing.push("su voz natural (unos 85 MB)");
+        if (missing.length && this.kv.get("hocki.dl.declined") !== "1") {
+          const q = `Para escucharte y responderte con su propia voz, Hocki necesita descargar una sola vez ${missing.join(" y ")}. Se guarda en tu equipo y después funciona sin internet. ¿Lo descargo? Responde «sí» o «no».`;
+          brain.ask(
+            () => { void this.downloadVoiceAssets(!ear?.ready, !!voz?.supported && !voz?.ready); return "¡Perfecto! Empiezo la descarga; te aviso el avance aquí."; },
+            () => { this.kv.set("hocki.dl.declined", "1"); this.startVoiceNow(); return "Está bien. Uso el reconocimiento y la voz de Windows. Cuando quieras, dime «descarga tu voz»."; },
+          );
+          this.pushChat("", q);
+          this.say("Necesito descargar mi oído y mi voz una sola vez. ¿Lo descargo?");
+          this.alert("prompt");
+          return;
+        }
+      }
+      this.startVoiceNow();
+    } finally {
+      this.preparing = false;
+    }
+  }
+
+  private async downloadVoiceAssets(ear: boolean, voz: boolean) {
+    const id = Date.now();
+    const line = (text: string) => {
+      const m = State.chatHistory.find((x) => x.id === id);
+      if (m) m.content = text; else State.chatHistory.push({ id, role: "assistant", content: text });
+      State.notify();
+    };
+    const off = await onEvent<{ label: string; done: number; total: number }>("download-progress", (p) => {
+      const what = p.label === "oido" ? "oído" : "voz";
+      const pct = p.total ? Math.floor((p.done / p.total) * 100) : 0;
+      line(`Descargando mi ${what}… ${pct ? `${pct} %` : `${Math.round(p.done / 1e6)} MB`}`);
+    });
+    try {
+      if (ear) { line("Descargando mi oído…"); await Bridge.sttDownload("base"); this.useEar = true; }
+      if (voz) { line("Descargando mi voz…"); await Bridge.naturalVoiceDownload(); }
+      line("¡Listo! Ya tengo oído y voz propios. Di «¡Hey Hocki!» cuando quieras hablarme.");
+      this.say("¡Listo! Ya puedo escucharte. Di: Hey Hocki, cuando quieras hablarme.");
+    } catch (e) {
+      line(`No pude terminar la descarga (${String(e).replace(/^Error:\s*/, "")}). Mientras tanto uso la voz de Windows; dime «descarga tu voz» para reintentar.`);
+    } finally {
+      off();
+      this.startVoiceNow();
+    }
+  }
+
+  /** Enciende la escucha con el motor que haya. */
+  private startVoiceNow() {
+    if (this.voice.on) return;
     if (this.voice.start()) {
+      this.kv.set("hocki.listen", "on");
       if (this.voiceId.gate) void this.startCapture();
       this.speaker.resume();
       this.speaker.settings.enabled = true;
+      if (this.useEar) this.pushChat("", "Te escucho. Di «¡Hey Hocki!» y tu orden, por ejemplo: «Hey Hocki, abre Word».");
     }
   }
 
   /** Lo que se oyó: solo reacciona si le hablan a Hocki (o si le dicen que pare). */
-  private onVoiceHeard(text: string) {
+  private onVoiceHeard(heard: string) {
+    let text = heard;
+    // «¡Hey Hocki!»: despierta; lo que venga detrás (o la siguiente frase) es la orden.
+    const w = detectWake(text);
+    if (w.woke) {
+      this.wakeWindow.open();
+      if (!w.rest) {
+        if (Date.now() < this.mutedUntil) return;
+        const ack = wakeAck(this.wakeCount++);
+        Sound.play("peek");
+        this.engine.greet();
+        if (State.mode === "hidden") this.reveal();
+        this.say(ack);
+        return;
+      }
+      text = `Hocki ${w.rest}`;
+    } else if (this.wakeWindow.isOpen) {
+      text = `Hocki ${text}`;
+    } else if (this.useEar && parseVoice(text).intent !== "stop") {
+      return; // sin «Hey Hocki» no es para él
+    }
+    this.wakeWindow.open(); // puedes seguir hablando sin repetir el nombre
     const cmd = parseVoice(text);
     if (Date.now() < this.mutedUntil && cmd.intent !== "stop") return; // es la voz del propio Hocki
     if (!cmd.addressed && cmd.intent !== "stop") {
@@ -645,6 +767,32 @@ export class Island {
         break;
       case "home":
         this.desktop.walkHome();
+        break;
+      case "voice_higher": case "voice_lower": case "voice_faster": case "voice_slower": {
+        if (a === "voice_higher") hockiVoice.pitch = Math.min(1.3, hockiVoice.pitch + 0.04);
+        if (a === "voice_lower") hockiVoice.pitch = Math.max(0.85, hockiVoice.pitch - 0.04);
+        if (a === "voice_faster") hockiVoice.speed = Math.min(1.5, hockiVoice.speed + 0.1);
+        if (a === "voice_slower") hockiVoice.speed = Math.max(0.7, hockiVoice.speed - 0.1);
+        this.kv.set("hocki.voice.style", JSON.stringify(hockiVoice));
+        this.speaker.resume(); this.speaker.settings.enabled = true;
+        this.say("¿Así te gusta más mi voz?");
+        break;
+      }
+      case "voice_natural": case "voice_system":
+        hockiVoice.natural = a === "voice_natural";
+        this.kv.set("hocki.voice.style", JSON.stringify(hockiVoice));
+        if (hockiVoice.natural && WINDOWS_APP) {
+          void Bridge.naturalVoiceStatus().then((v) => {
+            if (v?.ready) { this.say("Esta es mi voz natural."); return; }
+            this.kv.set("hocki.dl.declined", "0");
+            void this.downloadVoiceAssets(false, true);
+          });
+        } else this.say("Uso la voz de Windows.");
+        break;
+      case "voice_download":
+        this.kv.set("hocki.dl.declined", "0");
+        if (this.voice.on) this.voice.stop();
+        void this.prepareVoice();
         break;
       case "voice_enroll":
         void this.enrollVoice();

@@ -24,7 +24,14 @@ export class MicCapture {
   private node: ScriptProcessorNode | null = null;
   private ring = new Float32Array(0);
   private filled = 0;
+  private listeners = new Set<(chunk: Float32Array) => void>();
   sampleRate = 16000;
+
+  /** Recibe cada trozo de audio que llega (el oído de Hocki); devuelve cómo dejar de recibirlo. */
+  listen(fn: (chunk: Float32Array) => void): () => void {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  }
 
   get running() { return this.ctx !== null; }
 
@@ -49,7 +56,11 @@ export class MicCapture {
       this.filled = 0;
       const src = this.ctx.createMediaStreamSource(this.stream);
       this.node = this.ctx.createScriptProcessor(2048, 1, 1);
-      this.node.onaudioprocess = (ev) => this.push(ev.inputBuffer.getChannelData(0));
+      this.node.onaudioprocess = (ev) => {
+        const data = ev.inputBuffer.getChannelData(0);
+        this.push(data);
+        if (this.listeners.size) { const copy = new Float32Array(data); for (const l of this.listeners) l(copy); }
+      };
       const mute = this.ctx.createGain(); // el micrófono nunca suena por los altavoces
       mute.gain.value = 0;
       src.connect(this.node); this.node.connect(mute); mute.connect(this.ctx.destination);

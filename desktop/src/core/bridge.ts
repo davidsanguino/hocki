@@ -418,6 +418,13 @@ export const Bridge = {
   /** Windows' own voices (no internet): speak, stop, and the Spanish voices installed. */
   voiceSpeak: (text: string, voice: number) => call<boolean>("voice_speak", { text, voice }),
   voiceSpeakStop: () => call<void>("voice_speak_stop"),
+  /** Hocki's own ear (Whisper, on the device) and natural voice (Piper, on the device). */
+  sttStatus: () => call<{ ready: boolean; model: string | null }>("stt_status"),
+  sttDownload: (model: "base" | "small") => callOrThrow<void>("stt_download", { model }),
+  sttTranscribe: (audio: string, prompt: string) => callOrThrow<string>("stt_transcribe", { audio, prompt }),
+  naturalVoiceStatus: () => call<{ ready: boolean; supported: boolean }>("natural_voice_status"),
+  naturalVoiceDownload: () => callOrThrow<void>("natural_voice_download"),
+  naturalVoiceSpeak: (text: string, speed: number) => call<string>("natural_voice_speak", { text, speed }),
   voiceList: () => call<string[]>("voice_list"),
   desktopSetAsleep: (asleep: boolean) => call<void>("desktop_hocki_set_asleep", { asleep }),
   /** Windows: where the cursor is, the walkable area and the rhythm of input, to roam. */

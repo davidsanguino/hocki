@@ -1,4 +1,4 @@
-// Hocki pasea por toda la pantalla sin estorbar. Cada ~70 ms pregunta al sistema
+// Hocki pasea por toda la pantalla sin estorbar. Unas 30 veces por segundo pregunta al sistema
 // dónde está el cursor y si la persona está haciendo clic o escribiendo (solo el
 // ritmo, nunca qué tecla), decide el siguiente paso con roaming.ts y mueve su
 // ventanita. Su ventana deja pasar los clics salvo sobre su cuerpo, y cuando hay
@@ -45,6 +45,12 @@ export class DesktopRoamer {
   private last = 0;
   private lastCursor: [number, number] | null = null;
   private busy = false;
+  /** Posición y velocidad propias (con decimales): la ventana solo recibe el redondeo. */
+  private fpos: { x: number; y: number } | null = null;
+  private vel = { x: 0, y: 0 };
+  private retreatGoal: { x: number; y: number } | null = null;
+  private retreatSince = 0;
+  private heading = 0;
 
   constructor(io: RoamIO, opts: { now?: () => number; rand?: () => number } = {}) {
     this.io = io;
@@ -71,7 +77,10 @@ export class DesktopRoamer {
       // Su ventana es mayor que su cuerpo: se centra el cuerpo en ella.
       const inset = (WINDOW * s - size) / 2;
       const screen = { w: ww + 2 * inset, h: wh + 2 * inset };
-      const pos = { x: raw.pos[0] - wx + inset, y: raw.pos[1] - wy + inset };
+      const osPos = { x: raw.pos[0] - wx + inset, y: raw.pos[1] - wy + inset };
+      // Su propia posición con decimales; si alguien lo movió (arrastre, otra pantalla), se resincroniza.
+      if (!this.fpos || Math.hypot(osPos.x - this.fpos.x, osPos.y - this.fpos.y) > 6) { this.fpos = { ...osPos }; this.vel = { x: 0, y: 0 }; }
+      const pos = this.fpos;
       const cursor = { x: raw.cursor[0] - wx + inset, y: raw.cursor[1] - wy + inset };
 
       // Actividad: clics y teclas = ocupado; solo mover el cursor no lo es.
@@ -85,22 +94,42 @@ export class DesktopRoamer {
       if (!this.target && t >= this.pauseUntil) {
         this.target = nextWanderTarget(cursor, screen, [], this.rand, cfg);
       }
-      const goal = this.target ?? pos;
-      const frame = stepRoam(pos, goal, this.tracker, screen, dt, [], cfg);
+      const goalIn = this.target ?? pos;
+      // El rincón elegido se mantiene al menos 1,2 s: así no titubea entre dos rincones.
+      const prefer = this.retreatGoal && t - this.retreatSince < 1200 ? this.retreatGoal : this.retreatGoal ?? undefined;
+      const frame = stepRoam(pos, goalIn, this.tracker, screen, dt, [], cfg, prefer);
+      if (frame.retreating) {
+        if (!this.retreatGoal || frame.goal.x !== this.retreatGoal.x || frame.goal.y !== this.retreatGoal.y) { this.retreatGoal = frame.goal; this.retreatSince = t; }
+      } else this.retreatGoal = null;
 
-      const dx = frame.pos.x - pos.x, dy = frame.pos.y - pos.y;
-      const stepped = Math.hypot(dx, dy) > 0.5;
-      if (stepped) await this.io.moveTo(Math.round(frame.pos.x - inset + wx), Math.round(frame.pos.y - inset + wy));
+      // Movimiento suave: acelera, frena al llegar y nunca da saltos.
+      const gx = frame.goal.x - pos.x, gy = frame.goal.y - pos.y;
+      const dist = Math.hypot(gx, gy);
+      const arrive = Math.min(frame.speed, dist * 2.2);
+      const want = dist > 0.5 ? { x: (gx / dist) * arrive, y: (gy / dist) * arrive } : { x: 0, y: 0 };
+      const k = Math.min(1, dt * (frame.retreating ? 9 : 5));
+      this.vel.x += (want.x - this.vel.x) * k;
+      this.vel.y += (want.y - this.vel.y) * k;
+      const m = cfg.margin;
+      const nx = Math.max(m, Math.min(screen.w - cfg.size - m, pos.x + this.vel.x * dt));
+      const ny = Math.max(m, Math.min(screen.h - cfg.size - m, pos.y + this.vel.y * dt));
+      this.fpos = { x: nx, y: ny };
+      const tx = Math.round(nx - inset + wx), ty = Math.round(ny - inset + wy);
+      const stepped = tx !== raw.pos[0] || ty !== raw.pos[1];
+      if (stepped) await this.io.moveTo(tx, ty);
+      // Mira hacia donde camina, sin cambiar de lado por un temblor.
+      if (Math.abs(this.vel.x) > 25) this.heading = Math.sign(this.vel.x);
+      else if (Math.hypot(this.vel.x, this.vel.y) < 5) this.heading = 0;
 
       // Llegó: se queda un rato quieto antes de volver a pasear.
-      if (this.target && Math.hypot(this.target.x - frame.pos.x, this.target.y - frame.pos.y) < 2) {
+      if (this.target && Math.hypot(this.target.x - nx, this.target.y - ny) < 3) {
         this.target = null;
         this.pauseUntil = t + 2500 + this.rand() * 6000;
       }
       // Si tuvo que apartarse por actividad, deja el destino y espera a que pase.
       if (frame.mode === "busy") { this.target = null; this.pauseUntil = t + 1500; }
 
-      return { mode: frame.mode, opacity: frame.opacity, moved: stepped, heading: stepped ? Math.sign(dx) : 0 };
+      return { mode: frame.mode, opacity: frame.opacity, moved: stepped, heading: this.heading };
     } finally {
       this.busy = false;
     }

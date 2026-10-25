@@ -71,3 +71,19 @@ test("con pantalla escalada (150 %) también se mantiene dentro", async () => {
   assert.ok(state.pos[0] >= -10 && state.pos[0] <= 2880);
   assert.ok(state.pos[1] >= -10 && state.pos[1] <= 1560);
 });
+
+test("se mueve fluido: sin saltos ni temblores entre rincones", async () => {
+  const { state, moves, step } = rig({ cursor: [100, 100], pos: [900, 500] });
+  await step(300, 33);
+  for (let i = 1; i < moves.length; i++) {
+    const d = Math.hypot(moves[i][0] - moves[i - 1][0], moves[i][1] - moves[i - 1][1]);
+    assert.ok(d <= 16, `paso de ${d.toFixed(1)} px`);
+  }
+  // Ocupado con el cursor quieto: va a un rincón y se queda ahí (no va y viene).
+  const b = rig({ cursor: [960, 520], pos: [940, 500], typing: true });
+  await b.step(120, 33);
+  const settled = [...b.state.pos];
+  await b.step(40, 33);
+  assert.ok(Math.hypot(b.state.pos[0] - settled[0], b.state.pos[1] - settled[1]) < 3, "quieto en su rincón");
+  void state;
+});

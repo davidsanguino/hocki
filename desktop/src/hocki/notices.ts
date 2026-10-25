@@ -8,6 +8,8 @@ export const PRIVACY_NOTICE = [
   "• Para «aprender» un programa lee solo los NOMBRES de sus botones y menús, y los guarda en este equipo. Eso no sale a internet.",
   "• Tareas completas («hazlo tú: …»): solo si lo aceptas, Hocki toma una captura de tu pantalla en cada paso y la envía a la IA que elegiste en Ajustes para decidir qué hacer; después la borra. Con un modelo local (Ollama, LM Studio) no sale de tu equipo; con uno en la nube (Anthropic, OpenAI, Google, OpenRouter) viaja a ese servicio, según sus condiciones, y puede costar créditos.",
   "• Al conversar con una IA en la nube, tu pregunta viaja a ese servicio; con un modelo local no sale nada.",
+  "• Micrófono: solo con tu permiso y mientras la escucha está encendida. El oído de Hocki (Whisper) transcribe en tu equipo; el audio no se guarda ni sale a internet. Solo obedece cuando dices «¡Hey Hocki!».",
+  "• Voz: el oído (Whisper, MIT) y la voz natural (Piper, MIT; voz es_MX «ald», con su propia licencia) se descargan una sola vez de Hugging Face y GitHub, con tu permiso.",
   "• Tu huella de voz (si la registras) son números, no audio, y se quedan en este equipo.",
   "• Puedes quitar el permiso de cualquier programa («quita el permiso de Word»), borrar tu voz («borra mi voz») y su memoria («olvida todo») cuando quieras.",
 ].join("\n");

@@ -105,7 +105,8 @@ class DesktopHocki {
       this.canvas.style.opacity = "1";
     });
     await emitToWindow(ISLAND, DESKTOP_EVENTS.ready);
-    window.setInterval(() => void this.roam(), 70);
+    // ~30 pasos por segundo: el movimiento se ve continuo sin cargar el equipo.
+    window.setInterval(() => void this.roam(), 33);
   }
 
   /** Un paso de paseo: solo despierto, en el escritorio y sin que lo estén arrastrando. */
@@ -114,6 +115,8 @@ class DesktopHocki {
     if (this.kv.get("hocki.roam") === "off") { this.canvas.style.opacity = "1"; return; }
     const r = await this.roamer.tick();
     if (!r) return;
+    // La opacidad cambia con una transición suave (no de golpe).
+    if (this.canvas.style.transition === "") this.canvas.style.transition = "opacity 220ms ease";
     this.canvas.style.opacity = String(r.opacity);
     if (r.moved && r.mode !== "idle") this.lastAgentActive = performance.now(); // paseando no se duerme
   }

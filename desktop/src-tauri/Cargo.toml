@@ -20,6 +20,8 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# El oído de Hocki: reconocimiento de voz en el equipo (whisper.cpp). En CI: WHISPER_DONT_GENERATE_BINDINGS=1.
+whisper-rs = "0.16"
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Phone link (phone_link/): a TLS server for the Android app, off unless the user

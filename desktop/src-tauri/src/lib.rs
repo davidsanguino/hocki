@@ -32,6 +32,9 @@ mod sounds;
 mod spotify;
 mod tray;
 mod app_control;
+mod downloads;
+mod stt;
+mod tts_piper;
 mod screen_agent;
 mod tts_native;
 mod voice_native;
@@ -727,6 +730,12 @@ pub fn run() {
             launch_app,
             close_app,
             app_control::app_act,
+            stt::stt_status,
+            stt::stt_download,
+            stt::stt_transcribe,
+            tts_piper::natural_voice_status,
+            tts_piper::natural_voice_download,
+            tts_piper::natural_voice_speak,
             app_control::scan_installed,
             app_control::launch_app_id,
             screen_agent::agent_snapshot,

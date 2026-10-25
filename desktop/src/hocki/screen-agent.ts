@@ -125,13 +125,14 @@ export function typeText(text: string): string {
   return text.replace(/[+^%~(){}[\]]/g, (c) => `{${c}}`).replace(/\r?\n/g, "{ENTER}");
 }
 
-export function buildPrompt(goal: string, appName: string, snap: Snapshot, history: string[], learned: string[]): string {
+export function buildPrompt(goal: string, appName: string, snap: Snapshot, history: string[], learned: string[], recipe?: { goal: string; steps: string[] }): string {
   return [
     "You are Hocki, a careful assistant that operates a Windows computer for the user, one step at a time.",
     `The user's task (in Spanish): "${goal}"`,
     `Work ONLY inside the program "${appName}". Do not open other programs, settings, browsers or files the task does not need.`,
     `The attached image is the current screen, ${snap.width}x${snap.height} pixels. Coordinates are pixels of THAT image, origin top-left.`,
     learned.length ? `Some buttons/menus this program has: ${learned.slice(0, 60).join(", ")}.` : "",
+    recipe ? `You already did a similar task before ("${recipe.goal}") with these steps; reuse them if the screen matches:\n${recipe.steps.slice(0, 15).map((h, i) => `${i + 1}. ${h}`).join("\n")}` : "",
     history.length ? `Steps already done:\n${history.map((h, i) => `${i + 1}. ${h}`).join("\n")}` : "No steps done yet.",
     "Reply with ONLY one JSON object, no other text:",
     '{"thought": "<one short sentence in Spanish: what you see and why>", "action": "click|double_click|right_click|type|keys|scroll|wait|done|ask", "x": <int>, "y": <int>, "text": "<text to type, or the question/answer for ask/done>", "keys": "<e.g. ctrl+s, enter, alt+tab>", "amount": <scroll notches, negative = down>, "delicate": <true if this step deletes, sends, publishes, buys or overwrites something>}',
@@ -139,14 +140,14 @@ export function buildPrompt(goal: string, appName: string, snap: Snapshot, histo
   ].filter(Boolean).join("\n");
 }
 
-export interface RunResult { status: "done" | "asked" | "stopped" | "limit" | "error"; message: string; steps: number }
+export interface RunResult { status: "done" | "asked" | "stopped" | "limit" | "error"; message: string; steps: number; history?: string[] }
 
 /** Ejecuta la tarea paso a paso. `stopped()` se consulta antes de cada paso («Hocki fuera», «para»). */
 export async function runAgent(
   goal: string,
   appName: string,
   io: AgentIO,
-  opts: { stopped: () => boolean; learned?: string[]; maxSteps?: number } = { stopped: () => false },
+  opts: { stopped: () => boolean; learned?: string[]; maxSteps?: number; recipe?: { goal: string; steps: string[] } } = { stopped: () => false },
 ): Promise<RunResult> {
   const max = opts.maxSteps ?? MAX_STEPS;
   const history: string[] = [];
@@ -160,7 +161,7 @@ export async function runAgent(
       if (opts.stopped()) return { status: "stopped", message: "Me detuve.", steps: step };
       let reply: string;
       try {
-        reply = await io.think(buildPrompt(goal, appName, snap, history, opts.learned ?? []));
+        reply = await io.think(buildPrompt(goal, appName, snap, history, opts.learned ?? [], opts.recipe));
       } catch (e) {
         return { status: "error", message: `La IA no respondió: ${String(e).replace(/^Error:\s*/, "")}`, steps: step };
       }
@@ -173,7 +174,7 @@ export async function runAgent(
       }
       badReplies = 0;
       if (opts.stopped()) return { status: "stopped", message: "Me detuve.", steps: step };
-      if (a.action === "done") return { status: "done", message: a.text || a.thought || "Listo.", steps: step };
+      if (a.action === "done") return { status: "done", message: a.text || a.thought || "Listo.", steps: step, history };
       if (a.action === "ask") return { status: "asked", message: a.text || a.thought || "Necesito que me ayudes con algo.", steps: step };
       if (wantsSecret(a)) return { status: "asked", message: "Aquí hay que escribir una contraseña o un dato privado: eso lo haces tú. Avísame cuando sigamos.", steps: step };
 
@@ -222,7 +223,7 @@ export class AgentController {
   waiting() { return this.pendingAnswer !== null; }
 
   /** Empieza una tarea; false si ya hay otra en marcha. */
-  start(app: { id: string; name: string }, goal: string, learned: string[], done: (r: RunResult) => void): boolean {
+  start(app: { id: string; name: string }, goal: string, learned: string[], done: (r: RunResult) => void, recipe?: { goal: string; steps: string[] }): boolean {
     if (this.running) return false;
     this.running = true;
     this.stopFlag = false;
@@ -234,7 +235,7 @@ export class AgentController {
         base.say(`${q} Responde «sí» o «no».`);
       }),
     };
-    void runAgent(goal, app.name, io, { stopped: () => this.stopFlag, learned })
+    void runAgent(goal, app.name, io, { stopped: () => this.stopFlag, learned, recipe })
       .then(done, (e) => done({ status: "error", message: String(e), steps: 0 }))
       .finally(() => { this.running = false; this.pendingAnswer = null; });
     return true;
